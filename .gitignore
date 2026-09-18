@@ -1,0 +1,91 @@
+# Dependencies and package-manager caches
+/node_modules/
+/.pnpm-store/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Next.js and build output
+/.next/
+/out/
+/build/
+/dist/
+/.turbo/
+/.cache/
+
+# Tests and reports
+/coverage/
+/test-results/
+/playwright-report/
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+*.cer
+*.crt
+
+# Convex local state and generated deployment metadata
+/.convex/
+convex/.env.local
+
+# Hosting and deployment state
+/.vercel/
+/.netlify/
+/.wrangler/
+/.sites-runtime/
+
+# Native mobile build state (future Expo/React Native migration)
+/.expo/
+/.expo-shared/
+/android/.gradle/
+/android/app/build/
+/ios/Pods/
+/ios/build/
+*.ipa
+*.apk
+*.aab
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs and temporary files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+
+# Local AI/editor workspace state
+/.claude/
+/.cursor/
+/.windsurf/
+/.codex/
+/.agents/
