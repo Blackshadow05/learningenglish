@@ -1,135 +1,202 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { Icon, type IconName } from "./icons";
+import { Icon } from "./icons";
 import { useLearning } from "./learning-provider";
 import { useConversacionEnVivo } from "./live-conversation";
+import type { MensajeConversacion } from "./live-session";
+import styles from "./practice.module.css";
 
-const iconosEscenario: Record<string, IconName> = {
-  llegada_huesped: "home",
-  indicaciones_recepcion: "target",
-  estacionamiento_transporte: "arrow",
-};
+type Conversacion = ReturnType<typeof useConversacionEnVivo>;
+type FaseVoz = "lista" | "conectando" | "escuchando" | "hablando" | "pensando" | "silenciada" | "error";
 
-const modelosVoz = [
-  { nombre: "Gemini 3.8 Live", disponible: true },
-  { nombre: "GPT Live 1", disponible: false },
-];
+function Esfera({ fase, niveles }: { fase: FaseVoz; niveles?: Conversacion["niveles"] }) {
+  const esfera = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!niveles || !esfera.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let frame = 0;
+    let volumen = 0;
+    const elemento = esfera.current;
+    const animar = () => {
+      const siguiente = fase === "hablando" ? niveles.salida : fase === "escuchando" ? niveles.entrada : 0;
+      volumen += (siguiente - volumen) * 0.18;
+      elemento.style.setProperty("--voice-scale", String(1 + volumen * 0.16));
+      elemento.style.setProperty("--voice-energy", String(volumen));
+      frame = requestAnimationFrame(animar);
+    };
+    animar();
+    return () => cancelAnimationFrame(frame);
+  }, [fase, niveles]);
+  return <div ref={esfera} className={styles.visualizer} data-phase={fase} aria-hidden="true">
+    <div className={styles.halo}/>
+    <div className={styles.orb}><div className={styles.orbFlow}/><div className={styles.orbLight}/></div>
+    <div className={styles.wave}><i/><i/><i/><i/><i/></div>
+  </div>;
+}
+
+function formatoDuracion(segundos: number) {
+  return `${Math.floor(segundos / 60).toString().padStart(2, "0")}:${(segundos % 60).toString().padStart(2, "0")}`;
+}
+
+function Duracion({ inicio, fin }: { inicio: number | null; fin: number | null }) {
+  const [ahora, setAhora] = useState(() => Date.now());
+  useEffect(() => {
+    if (!inicio || fin) return;
+    const timer = setInterval(() => setAhora(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [inicio, fin]);
+  return <span className={styles.duration} aria-label="Duración de la conversación">{formatoDuracion(inicio ? Math.max(0, Math.floor(((fin ?? ahora) - inicio) / 1000)) : 0)}</span>;
+}
+
+function Transcripcion({ mensajes }: { mensajes: MensajeConversacion[] }) {
+  const lista = useRef<HTMLDivElement>(null);
+  const seguir = useRef(true);
+  useEffect(() => {
+    if (lista.current && seguir.current) lista.current.scrollTop = lista.current.scrollHeight;
+  }, [mensajes]);
+  return <div className={styles.transcript} id="voice-transcript" ref={lista} role="region" aria-label="Transcripción de la conversación" tabIndex={0} onScroll={() => {
+    const el = lista.current;
+    if (el) seguir.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }}>
+    <p className={styles.transcriptHeading}>TRANSCRIPCIÓN EN VIVO</p>
+    {!mensajes.length && <p className={styles.transcriptEmpty}>Lo que conversemos aparecerá aquí.</p>}
+    {mensajes.map(mensaje => <div className={styles.transcriptMessage} key={mensaje.id} data-speaker={mensaje.rol}>
+      <span>{mensaje.rol === "tutor" ? "Bloom" : "Tú"}</span>
+      <p lang="en">{mensaje.texto}</p>
+    </div>)}
+  </div>;
+}
+
+function SalaVoz({ conversacion, titulo, terminar, reintentar }: {
+  conversacion: Conversacion; titulo: string; terminar: () => void; reintentar: () => void;
+}) {
+  const dialogo = useRef<HTMLDialogElement>(null);
+  const [subtitulos, setSubtitulos] = useState(false);
+  const [escribiendo, setEscribiendo] = useState(false);
+  const [texto, setTexto] = useState("");
+  const { estado, error, micSilenciado, tutorHablando, estudianteHablando, esperandoRespuesta, mensajes, inicio, fin, niveles, silenciar, enviarTexto } = conversacion;
+  const conectado = estado === "en_vivo";
+  const fallida = estado === "error" || estado === "finalizada";
+  const fase: FaseVoz = fallida ? "error" : !conectado ? "conectando" : tutorHablando ? "hablando" : estudianteHablando ? "escuchando" : esperandoRespuesta ? "pensando" : micSilenciado ? "silenciada" : "escuchando";
+  const etiquetas: Record<FaseVoz, [string, string]> = {
+    lista: ["Hablemos un rato", "Una conversación a tu ritmo."],
+    conectando: ["Preparando tu conversación", "Permite el micrófono si tu navegador lo solicita."],
+    escuchando: [estudianteHablando ? "Te escucho" : "Te toca a ti", "Habla con naturalidad. No tienes que pulsar nada."],
+    hablando: ["Bloom está hablando", micSilenciado ? "Tu micrófono está silenciado." : "Puedes interrumpirme cuando quieras."],
+    pensando: ["Un momento…", "Estoy preparando mi respuesta."],
+    silenciada: ["Micrófono silenciado", "Actívalo cuando quieras seguir hablando."],
+    error: ["Hagamos una pausa", error || "La conversación terminó. Puedes volver a conectar."],
+  };
+
+  useEffect(() => {
+    const dialog = dialogo.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
+
+  function alternarTexto() {
+    if (!escribiendo) {
+      silenciar(true);
+      setSubtitulos(true);
+    }
+    setEscribiendo(!escribiendo);
+  }
+
+  return <dialog ref={dialogo} className={styles.room} aria-labelledby="voice-title" onCancel={evento => { evento.preventDefault(); terminar(); }}>
+    <div className={styles.roomInner} data-expanded={subtitulos || escribiendo}>
+      <header className={styles.roomHeader}>
+        <div className={styles.roomBrand}><span className="brand-mark"><i/><i/><i/><i/></span><span>bloom<span className={styles.brandDot}>.</span><small>Modo de voz</small></span></div>
+        <button className={styles.captionButton} type="button" aria-label={subtitulos ? "Ocultar transcripción" : "Mostrar transcripción"} aria-pressed={subtitulos} aria-controls="voice-transcript" onClick={() => setSubtitulos(!subtitulos)}><Icon name="captions" size={23}/></button>
+      </header>
+      <div className={styles.sessionMeta}><span><Icon name="headphones" size={14}/>{titulo}</span><Duracion inicio={inicio} fin={fin}/></div>
+      <div className={styles.stage}>
+        <Esfera fase={fase} niveles={niveles}/>
+        <div className={styles.voiceStatus} role="status" aria-live="polite" aria-atomic="true">
+          <div className={styles.statusLabel}><span data-phase={fase}/>{fase === "error" ? "CONVERSACIÓN EN PAUSA" : fase === "conectando" ? "CONECTANDO" : "TÚ Y BLOOM"}</div>
+          <h1 id="voice-title">{etiquetas[fase][0]}</h1>
+          <p>{etiquetas[fase][1]}</p>
+        </div>
+        {fallida && <button className={styles.retryButton} onClick={reintentar}><Icon name="repeat" size={18}/>Volver a conectar</button>}
+      </div>
+      {subtitulos && <Transcripcion mensajes={mensajes}/>}
+      {escribiendo && conectado && <form className={styles.composer} onSubmit={evento => {
+        evento.preventDefault();
+        if (enviarTexto(texto)) setTexto("");
+      }}>
+        <label className={styles.srOnly} htmlFor="voice-message">Mensaje para Bloom</label>
+        <input id="voice-message" value={texto} onChange={evento => setTexto(evento.target.value)} placeholder="Escribe algo en inglés…" autoComplete="off" autoFocus/>
+        <button type="submit" disabled={!texto.trim()} aria-label="Enviar mensaje"><Icon name="send" size={19}/></button>
+      </form>}
+      <footer className={styles.roomFooter}>
+        <div className={styles.controls}>
+          <div><button className={styles.controlButton} disabled={!conectado} onClick={alternarTexto} aria-label={escribiendo ? "Cerrar teclado" : "Escribir un mensaje"} aria-pressed={escribiendo}><Icon name="keyboard" size={23}/></button><span>Escribir</span></div>
+          <div><button className={`${styles.controlButton} ${styles.micButton}`} data-muted={micSilenciado} disabled={!conectado} onClick={() => { silenciar(!micSilenciado); if (micSilenciado) setEscribiendo(false); }} aria-label={micSilenciado ? "Activar micrófono" : "Silenciar micrófono"} aria-pressed={micSilenciado}><Icon name={micSilenciado ? "mic-off" : "mic"} size={27}/></button><span>{micSilenciado ? "Activar" : "Silenciar"}</span></div>
+          <div><button className={`${styles.controlButton} ${styles.endButton}`} onClick={terminar} aria-label={estado === "conectando" ? "Cancelar conexión" : "Terminar conversación"}><Icon name="close" size={27}/></button><span>{estado === "conectando" ? "Cancelar" : "Terminar"}</span></div>
+        </div>
+        <p>{escribiendo ? "El micrófono está silenciado mientras escribes." : "Un espacio para hablar, escuchar y volver a intentar."}</p>
+      </footer>
+    </div>
+  </dialog>;
+}
 
 export function Practice() {
-  const { provider, setProvider, level, speak } = useLearning();
+  const { level } = useLearning();
   const escenarios = useQuery(api.escenarios.listar);
-  const {
-    estado,
-    mensajes,
-    error,
-    micActivo,
-    micError,
-    micSilenciado,
-    tutorHablando,
-    iniciar,
-    finalizar,
-    enviarTexto,
-    alternarMicrofono,
-  } = useConversacionEnVivo();
-  const [escenarioId, setEscenarioId] = useState<string | null>(null);
-  const [panelAbierto, setPanelAbierto] = useState(false);
-  const [finished, setFinished] = useState(false);
-  const [texto, setTexto] = useState("");
-  const [modoTexto, setModoTexto] = useState(false);
-  const escenario =
-    escenarios?.find((item) => item.id === escenarioId) ?? escenarios?.[0] ?? null;
-  const enVivo = estado === "en_vivo" || estado === "conectando";
-  const puedeIniciar = escenario !== null && provider === "Gemini 3.8 Live";
-  const ultimoTutor = [...mensajes].reverse().find((mensaje) => mensaje.rol === "tutor");
+  const conversacion = useConversacionEnVivo();
+  const [escenarioId, setEscenarioId] = useState("");
+  const [salaAbierta, setSalaAbierta] = useState(false);
+  const [resumen, setResumen] = useState<{ duracion: number; turnos: number } | null>(null);
+  const [verResumen, setVerResumen] = useState(false);
+  const escenario = escenarios?.find(item => item.id === escenarioId) ?? escenarios?.[0];
 
   function comenzar() {
     if (!escenario) return;
-    setPanelAbierto(true);
-    setFinished(false);
-    setModoTexto(false);
-    void iniciar(escenario.id, level);
+    setResumen(null);
+    setSalaAbierta(true);
+    setVerResumen(false);
+    void conversacion.iniciar(escenario.id, level);
   }
   function terminar() {
-    finalizar();
-    setPanelAbierto(false);
-    setFinished(true);
+    const turnos = conversacion.mensajes.filter(mensaje => mensaje.rol === "estudiante").length;
+    if (conversacion.inicio && turnos) {
+      setResumen({ duracion: Math.floor(((conversacion.fin ?? Date.now()) - conversacion.inicio) / 1000), turnos });
+    }
+    conversacion.finalizar();
+    setSalaAbierta(false);
   }
-  function enviar() {
-    const limpio = texto.trim();
-    if (!limpio) return;
-    enviarTexto(limpio);
-    setTexto("");
-  }
-  return <>
-    <section className="page-heading">
-      <div className="eyebrow">AQUÍ PUEDES EQUIVOCARTE</div>
-      <h1>Más conversación.<br/>Más confianza<span className="purple-text">.</span></h1>
-      <p>Tu espacio para soltar el inglés, sin presión.</p>
-    </section>
-    <div className="provider-control">
-      <span>Tu compañero de voz</span>
-      <div className="provider-switch" aria-label="Modelo de voz">
-        {modelosVoz.map(modelo => <button key={modelo.nombre} className={provider === modelo.nombre ? "active" : ""} disabled={enVivo || !modelo.disponible} onClick={() => setProvider(modelo.nombre)} aria-pressed={provider === modelo.nombre}><Icon name="sparkles" size={16}/>{modelo.nombre}</button>)}
+
+  return <div className={styles.practice}>
+    {resumen ? <section className={styles.summary}>
+      <div className={styles.summaryIcon}><Icon name="check" size={30}/></div>
+      <p className={styles.eyebrow}>UN POCO MÁS DE CONFIANZA</p>
+      <h1>Hoy te animaste<br/>a hablar.</h1>
+      <p>Cada conversación cuenta. Sigue a tu ritmo.</p>
+      <div className={styles.summaryStats}><div><strong>{formatoDuracion(resumen.duracion)}</strong><span>conversando</span></div><div><strong>{resumen.turnos}</strong><span>{resumen.turnos === 1 ? "intervención tuya" : "intervenciones tuyas"}</span></div></div>
+      <button className={styles.startButton} onClick={comenzar}><Icon name="mic" size={20}/>Volver a conversar</button>
+      <button className={styles.secondaryButton} onClick={() => setResumen(null)}>Elegir otra situación<Icon name="arrow" size={17}/></button>
+      <button className={styles.transcriptToggle} aria-expanded={verResumen} onClick={() => setVerResumen(!verResumen)}><Icon name="captions" size={18}/>{verResumen ? "Ocultar conversación" : "Ver conversación"}</button>
+      {verResumen && <Transcripcion mensajes={conversacion.mensajes}/>}
+    </section> : <>
+      <section className={styles.heading}>
+        <p className={styles.eyebrow}>CONVERSA CON BLOOM</p>
+        <h1>Todo empieza<br/>con un <em>hola.</em></h1>
+        <p>Habla, escucha y deja que la conversación fluya.</p>
+      </section>
+      <div className={styles.preview}><Esfera fase="lista"/><span className={styles.voiceBadge}><span/>Voz en tiempo real</span></div>
+      <div className={styles.scenario}>
+        <label htmlFor="voice-scenario">HOY PRACTICAMOS</label>
+        <div className={styles.scenarioSelect}><span><Icon name="briefcase" size={21}/></span><select id="voice-scenario" value={escenario?.id ?? ""} disabled={!escenarios?.length} onChange={evento => setEscenarioId(evento.target.value)}>
+          {!escenarios?.length && <option value="">{escenarios ? "Sin situaciones disponibles" : "Preparando situaciones…"}</option>}
+          {escenarios?.map(item => <option key={item.id} value={item.id}>{item.titulo}</option>)}
+        </select><Icon name="chevron" size={18}/></div>
+        <p>{escenario?.subtitulo ?? "Estamos preparando tu próxima conversación."}</p>
       </div>
-      <span className="provider-note">{provider === "Gemini 3.8 Live" ? "Voz en tiempo real · GPT Live 1 llegará después" : "GPT Live 1 todavía no está conectado"}</span>
-    </div>
-    {!panelAbierto && !finished && <>
-      <div className="voice-stage">
-        <div className="voice-orbit"><div className="voice-orb"><Icon name="mic" size={38}/></div><span className="orb-star star-one">✦</span><span className="orb-star star-two">✦</span></div>
-        <h2>Tenemos mucho de qué hablar.</h2>
-        <p>Elige una situación de hotel y habla con Gemini en tiempo real.</p>
-        <span className="tag purple-tag">{level ?? "Tu nivel"} · Conversación real</span>
-      </div>
-      <div className="section-heading"><h2>¿Por dónde empezamos?</h2></div>
-      <div className="scenario-list">
-        {(escenarios ?? []).map(item => <button key={item.id} className={`scenario-option ${escenario?.id === item.id ? "selected" : ""}`} aria-pressed={escenario?.id === item.id} onClick={() => setEscenarioId(item.id)}><span className="feature-icon"><Icon name={iconosEscenario[item.id] ?? "globe"} size={22}/></span><span><strong>{item.titulo}</strong><small>{item.subtitulo}</small></span><span className="radio-dot">{escenario?.id === item.id && <i/>}</span></button>)}
-        {!escenarios && <p className="loading-message">Preparando escenarios…</p>}
-      </div>
-      <button className="button purple-button full" disabled={!puedeIniciar} onClick={comenzar}><Icon name="mic" size={20}/>Empezar a conversar</button>
-      <p className="fine-print">Voz en tiempo real · necesitarás permitir el micrófono (también puedes escribir)</p>
+      <button className={styles.startButton} disabled={!escenario} onClick={comenzar}><Icon name="mic" size={21}/>Empezar a hablar<Icon name="arrow" size={19}/></button>
+      <p className={styles.startNote}>Activa el micrófono una vez. Después, solo conversa.</p>
+      <div className={styles.features}><span><Icon name="headphones" size={16}/>A tu ritmo</span><span className={styles.featureDot}/><span><Icon name="sparkles" size={16}/>Sin presión</span></div>
     </>}
-    {panelAbierto && <section className="conversation-panel">
-      <div className="conversation-header">
-        <span className="live-dot"/>
-        <div>
-          <strong>{escenario?.titulo ?? "Conversación"}</strong>
-          <span>{estado === "conectando" ? "Conectando con Gemini…" : estado === "en_vivo" ? `${provider} · ${micActivo ? (micSilenciado ? "micrófono en silencio" : "te escucho por voz") : "modo texto"}` : estado === "error" ? "La sesión se detuvo" : "Sesión finalizada"}</span>
-        </div>
-        <button className="icon-button" aria-label="Terminar conversación" onClick={terminar}><Icon name="close"/></button>
-      </div>
-      <div className="transcript" aria-live="polite">
-        {!mensajes.length && <div className="message feedback"><span className="message-label">Bloom</span><p lang="es">{estado === "conectando" ? "Un momento, estoy preparando la sala…" : estado === "error" ? "No pudimos conectar. Revisa la clave de Gemini y vuelve a intentarlo." : micError ? micError : "Empieza a hablar cuando quieras; tu tutor de hotel te responderá por voz."}</p></div>}
-        {micError && mensajes.length > 0 && <div className="message feedback"><span className="message-label">Micrófono</span><p lang="es">{micError}</p></div>}
-        {mensajes.map(mensaje => <div className={`message ${mensaje.rol === "tutor" ? "ai" : "user"}`} key={mensaje.id}><span className="message-label">{mensaje.rol === "tutor" ? "Bloom" : "Tú"}</span><p lang="en">{mensaje.texto}</p>{mensaje.rol === "tutor" && <button className="text-button" onClick={() => speak(mensaje.texto)}><Icon name="volume" size={16}/>Escuchar texto</button>}</div>)}
-        {tutorHablando && <div className="message ai"><span className="message-label">Bloom</span><p className="muted">Hablando…</p></div>}
-        {error && <div className="message feedback" role="alert"><span className="message-label">Aviso</span><p lang="es">{error}</p></div>}
-      </div>
-      {micActivo && !modoTexto ? <div className="reply-options">
-        <p className="eyebrow" role="status">{estado === "en_vivo" ? (micSilenciado ? "MICRÓFONO EN SILENCIO" : "TE ESCUCHO · HABLA CUANDO QUIERAS") : "PREPARANDO EL MICRÓFONO"}</p>
-        <button className="button purple-button full" type="button" onClick={alternarMicrofono} disabled={estado !== "en_vivo"}>{micSilenciado ? <><Icon name="mic" size={18}/>Activar micrófono</> : <><Icon name="pause" size={18}/>Silenciar micrófono</>}</button>
-        <p className="fine-print">Habla con naturalidad y espera la respuesta en voz alta; puedes interrumpir al tutor hablando.</p>
-        <button className="text-button skip" type="button" onClick={() => setModoTexto(true)}>Prefiero escribir en su lugar</button>
-        <button className="button secondary full" type="button" onClick={terminar}>Terminar práctica<Icon name="check" size={18}/></button>
-      </div> : <form className="reply-options" onSubmit={evento => { evento.preventDefault(); enviar(); }}>
-        <label className="search-field">
-          <Icon name="send" size={18}/>
-          <input value={texto} onChange={evento => setTexto(evento.target.value)} placeholder="Escribe en inglés para el tutor" aria-label="Mensaje para el tutor" disabled={estado !== "en_vivo"}/>
-        </label>
-        <button className="button purple-button full" type="submit" disabled={estado !== "en_vivo" || !texto.trim()}>Enviar mensaje<Icon name="send" size={18}/></button>
-        {micActivo && <button className="text-button skip" type="button" onClick={() => setModoTexto(false)}>Volver a hablar por voz</button>}
-        <button className="button secondary full" type="button" onClick={terminar}>Terminar práctica<Icon name="check" size={18}/></button>
-      </form>}
-    </section>}
-    {finished && <div className="session-summary">
-      <div className="modal-emblem lilac-icon"><Icon name="sparkles" size={30}/></div>
-      <h2>Ya diste el primer paso.</h2>
-      <p>Así se siente practicar: hablar, recibir una corrección natural y volver a intentarlo.</p>
-      {ultimoTutor && <div className="example-box"><span className="eyebrow">UNA FRASE PARA LLEVARTE</span><h3 lang="en">{ultimoTutor.texto}</h3><button className="text-button" onClick={() => speak(ultimoTutor.texto)}><Icon name="volume" size={18}/>Escuchar otra vez</button></div>}
-      <button className="button purple-button full" onClick={() => setFinished(false)}>Probar otra situación<Icon name="arrow" size={18}/></button>
-    </div>}
-    <div className="soft-note"><Icon name="book"/><span>Conversación con Gemini 3.8 Live: dudas del idioma, speaking, listening y correcciones que te ayudan a avanzar.</span></div>
-  </>;
+    {salaAbierta && <SalaVoz conversacion={conversacion} titulo={escenario?.titulo ?? "Conversación"} terminar={terminar} reintentar={comenzar}/>}
+  </div>;
 }

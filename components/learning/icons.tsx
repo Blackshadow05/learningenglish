@@ -1,10 +1,13 @@
 import type { CSSProperties } from "react";
 
-export type IconName = "home" | "book" | "mic" | "game" | "chart" | "settings" | "arrow" | "chevron" | "sparkles" | "flame" | "clock" | "check" | "close" | "volume" | "search" | "plus" | "globe" | "briefcase" | "coffee" | "headphones" | "repeat" | "target" | "send" | "pause" | "leaf" | "help" | "logout";
+export type IconName = "home" | "book" | "mic" | "mic-off" | "captions" | "keyboard" | "game" | "chart" | "settings" | "arrow" | "chevron" | "sparkles" | "flame" | "clock" | "check" | "close" | "volume" | "search" | "plus" | "globe" | "briefcase" | "coffee" | "headphones" | "repeat" | "target" | "send" | "pause" | "leaf" | "help" | "logout";
 const paths: Record<IconName, React.ReactNode> = {
   home: <><path d="m3 10 9-7 9 7"/><path d="M5 9v12h5v-7h4v7h5V9"/></>,
   book: <><path d="M12 5v16M3 4h5a4 4 0 0 1 4 2 4 4 0 0 1 4-2h5v15h-5a5 5 0 0 0-4 2 5 5 0 0 0-4-2H3Z"/></>,
   mic: <><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></>,
+  "mic-off": <><path d="m3 3 18 18M9 9v3a3 3 0 0 0 5 2M9 4a3 3 0 0 1 6 1v4M5 10v2a7 7 0 0 0 12 5m2-4v-3M12 19v3m-4 0h8"/></>,
+  captions: <><rect x="3" y="5" width="18" height="14" rx="4"/><path d="M7 10h4m3 0h3M7 14h2m3 0h5"/></>,
+  keyboard: <><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"/></>,
   game: <><path d="M7 7h10c3 0 5 10 3 12-2 2-5-3-5-3H9s-3 5-5 3C2 17 4 7 7 7Z"/><path d="M8 10v5m-2.5-2.5h5M16 11h.01M18 14h.01"/></>,
   chart: <><path d="M4 3v17h17M8 15v-4m5 4V7m5 8V4"/></>,
   settings: <><path d="m10 3-.6 2.2-2 .9L5.2 5 3 9l1.8 1.5v3L3 15l2.2 4 2.2-1.1 2 .9L10 21h4l.6-2.2 2-.9 2.2 1.1 2.2-4-1.8-1.5v-3L21 9l-2.2-4-2.2 1.1-2-.9L14 3Z"/><circle cx="12" cy="12" r="3"/></>,

@@ -6,7 +6,7 @@ Prototipo de diseño construido sobre la base existente de Next.js 16.3.3 y Reac
 
 - **Hoy**: siguiente paso recomendado, evaluación inicial, meta diaria e intereses.
 - **Palabras**: colección de ejemplo, búsqueda, filtros, pronunciación del navegador y tarjetas de repaso. Las respuestas cambian la familiaridad y el próximo intervalo en memoria.
-- **Conversar**: selector visual GPT Live 1 / Gemini 3.8 Live y tres conversaciones guiadas con correcciones predeterminadas. No usa micrófono, modelos remotos ni llamadas de pago.
+- **Conversar**: conversación de voz con Gemini Live y tres situaciones de hotel. Vista de voz a pantalla completa, saludo automático, escucha continua, interrupciones al hablar, controles de micrófono, transcripción opcional y alternativa para escribir. Al terminar muestra la duración y las intervenciones de la sesión.
 - **Jugar**: emparejar vocabulario, ordenar frases y elegir traducciones. Los juegos de vocabulario priorizan las expresiones con menor familiaridad.
 - **Progreso**: resultado orientativo de cinco preguntas, repasos, puntos y distribución de familiaridad.
 
@@ -22,6 +22,7 @@ Tipografía del sistema, navegación inferior, áreas seguras, altura dinámica,
 pnpm dev
 pnpm typecheck
 pnpm lint
+pnpm test:voice
 pnpm build
 ```
 
@@ -36,11 +37,19 @@ node node_modules/next/dist/bin/next build
 
 `allowedDevOrigins` incluye únicamente la dirección LAN observada durante la previsualización móvil. Debe actualizarse si cambia la dirección del servidor local.
 
-## Integraciones de la siguiente etapa
+## Conversación de voz
 
-No se ha configurado ni desplegado backend. Convex será la fuente de verdad para estudiantes, intereses, vocabulario, historial de ejercicios, evaluaciones, dominio por palabra y fechas de repetición espaciada. Las tablas, autenticación, permisos y funciones se definirán en la etapa de implementación.
+El cliente obtiene un token efímero con `conversacion.crearTokenLive` y conecta directamente con Gemini Live. La clave permanente permanece en Convex. Requiere `NEXT_PUBLIC_CONVEX_URL` en Next.js y `GEMINI_API_KEY` en el deployment de Convex; `GEMINI_MODELO_LIVE` y `GEMINI_VOZ_LIVE` permiten configurar el modelo y la voz. Las sesiones reales consumen la API configurada.
 
-Los nombres de modelos son las etiquetas solicitadas para el diseño, no identificadores de API verificados. Antes de integrar voz se deben comprobar disponibilidad, nombres e interfaces oficiales, utilizar credenciales efímeras apropiadas y mantener los secretos en servidor. El tutor debe limitarse a enseñanza del idioma y conversaciones con objetivo pedagógico; el texto del prototipo no implementa esa política en un modelo real.
+La voz necesita HTTPS o localhost y permiso del micrófono. AudioWorklet envía PCM de 16 kHz; la reproducción usa un contexto de 24 kHz. La detección de turnos e interrupciones la realiza el servicio, con 800 ms de tolerancia al silencio. Al silenciar se desactiva la pista y se envía `audioStreamEnd`, según la [documentación de Gemini Live](https://ai.google.dev/gemini-api/docs/live-api/capabilities). El estado de reproducción se mantiene hasta que termina el último bloque de audio, independientemente de cuándo finalice la generación.
+
+Escribir silencia el micrófono; se reactiva explícitamente con el control central. Cancelar, salir de la página, perder la conexión o desconectar el micrófono libera los recursos de audio. Las transcripciones y el resumen solo viven en memoria durante esta sesión; no se guarda un historial remoto.
+
+`pnpm test:voice` (o `node --test tests/live-session.test.mjs`) verifica el controlador con dispositivos y transporte simulados: cancelación durante permisos/token/conexión, errores, silencio, transcripciones, interrupciones y cola de reproducción. No utiliza el micrófono ni consume la API. La calidad percibida, el eco y la latencia deben comprobarse también con micrófono y altavoces o auriculares reales.
+
+## Integraciones y próximos pasos
+
+Convex ya sirve vocabulario, escenarios y tokens de conversación. El progreso del estudiante, historial de ejercicios, evaluaciones y fechas de repetición espaciada todavía se mantienen en memoria en la interfaz.
 
 Se conserva como requisito la evaluación adaptativa con «jev de TypesafeAI». Falta identificar el producto/SDK exacto antes de diseñar esa integración. El motor real debe evaluar comprensión y uso contextual, actualizar dominio y nivel y ajustar los intervalos; el prototipo solo demuestra visualmente esos conceptos.
 
