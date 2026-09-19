@@ -4,6 +4,21 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 
+function cargar(ruta) {
+  const exports = {};
+  const output = ts.transpileModule(readFileSync(ruta, "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  runInNewContext(output, { exports, require: ruta => {
+    if (ruta === "@google/genai") return {
+      Modality: { AUDIO: "AUDIO" }, ActivityHandling: { START_OF_ACTIVITY_INTERRUPTS: "START_OF_ACTIVITY_INTERRUPTS" },
+      StartSensitivity: { START_SENSITIVITY_LOW: "START_SENSITIVITY_LOW" }, EndSensitivity: { END_SENSITIVITY_LOW: "END_SENSITIVITY_LOW" },
+    };
+    throw new Error(`Unexpected runtime import ${ruta}`);
+  } });
+  return exports;
+}
+const configuracion = cargar(new URL("../lib/practice-config.ts", import.meta.url));
+const revision = cargar(new URL("../lib/practice-review.ts", import.meta.url));
+
 // Run the actual controller with deterministic microphone, transport and audio devices.
 // No API requests, microphone access or new test dependencies are needed.
 const codigo = ts.transpileModule(readFileSync(new URL("../components/learning/live-session.ts", import.meta.url), "utf8"), {
@@ -22,7 +37,7 @@ async function hasta(condicion) {
 
 function entorno(opciones = {}) {
   const contextos = [], capturas = [], sesiones = [], temporizadores = new Map();
-  let permisos = 0, tokens = 0, reloj = 10000, timerId = 0;
+  let permisos = 0, tokens = 0, reloj = 10000, timerId = 0, solicitud, preferencias, worklet;
   const pista = { enabled: true, stopped: false, onended: null, stop() { this.stopped = true; } };
   const flujo = { getTracks: () => [pista], getAudioTracks: () => [pista] };
   class Contexto {
@@ -47,35 +62,39 @@ function entorno(opciones = {}) {
     }
   }
   class Captura {
-    constructor() { this.port = { onmessage: null, close() {} }; capturas.push(this); }
+    constructor() { this.port = { onmessage: null, close() {}, postMessage() { if (!opciones.flushPendiente) this.onmessage?.({ data: "flushed" }); } }; capturas.push(this); }
     connect() {}
     disconnect() {}
   }
   const exports = {};
   runInNewContext(codigo, {
     exports, Error, Float32Array, Uint8Array, DataView, btoa, atob, Blob,
+    require: nombre => nombre.endsWith("practice-config") ? configuracion : revision,
     AudioContext: Contexto, AudioWorkletNode: Captura,
     navigator: { mediaDevices: { getUserMedia: async () => {
       permisos++;
       if (opciones.permisoError) throw opciones.permisoError;
       return opciones.microfonoPendiente?.promesa ?? flujo;
     } } },
-    URL: { createObjectURL: () => "blob:test", revokeObjectURL() {} },
+    URL: { createObjectURL: blob => { worklet = blob; return "blob:test"; }, revokeObjectURL() {} },
     performance: { now: () => reloj },
     setTimeout: callback => { temporizadores.set(++timerId, callback); return timerId; },
     clearTimeout: id => temporizadores.delete(id),
     setInterval: () => 1, clearInterval() {},
   });
   const controller = new exports.ConversacionLive({
-    crearToken: async () => {
+    crearToken: async args => {
+      solicitud = args;
       tokens++;
       return opciones.tokenPendiente?.promesa ?? { token: "test", modelo: "test", voz: "test", instruccion: "test" };
     },
-    conectar: async (_, callbacks) => {
+    conectar: async (_, callbacks, config) => {
+      preferencias = config;
       const sesion = {
-        callbacks, inputs: [], turns: [], closed: false,
+        callbacks, inputs: [], turns: [], tools: [], closed: false,
         sendRealtimeInput(input) { if (opciones.sendError) throw new Error("closed"); this.inputs.push(input); },
         sendClientContent(turn) { this.turns.push(turn); },
+        sendToolResponse(tool) { this.tools.push(tool); },
         close() { this.closed = true; callbacks.onclose?.({}); },
       };
       sesiones.push(sesion);
@@ -85,8 +104,10 @@ function entorno(opciones = {}) {
   return {
     controller, pista, flujo, contextos, capturas, sesiones, temporizadores,
     get permisos() { return permisos; }, get tokens() { return tokens; },
-    iniciar: () => controller.iniciar("llegada_huesped", "A1"),
+    get solicitud() { return solicitud; }, get preferencias() { return preferencias; }, get worklet() { return worklet; },
+    iniciar: config => controller.iniciar("llegada_huesped", "A1", config),
     recibir: content => sesiones.at(-1).callbacks.onmessage({ serverContent: content }),
+    tool: (name, args) => sesiones.at(-1).callbacks.onmessage({ toolCall: { functionCalls: [{ id: "call1", name, args }] } }),
     audio: () => capturas.at(-1).port.onmessage?.({ data: new Float32Array([.1, -.1, .2, -.2]) }),
     avanzar: ms => { reloj += ms; },
     codificarPcm: exports.codificarPcm,
@@ -256,4 +277,128 @@ test("audio upload failure cleans up instead of repeatedly throwing from the wor
   assert.equal(e.controller.getSnapshot().estado, "error");
   assert.equal(e.capturas[0].port.onmessage, null);
   assert.ok(e.pista.stopped);
+});
+
+const base = configuracion.CONFIGURACION_INICIAL;
+test("manual mode only streams inside explicit activity and flushes the final packet before ending", async () => {
+  const e = entorno({ flushPendiente: true }); await e.iniciar({ ...base, escucha: "pulsar" });
+  assert.equal(e.pista.enabled, false); e.audio(); assert.equal(e.sesiones[0].inputs.length, 0);
+  e.recibir(audio);
+  e.controller.pulsar(true); e.controller.pulsar(true);
+  assert.equal(e.pista.enabled, true); assert.ok(e.contextos[1].sources[0].stopped);
+  e.audio(); e.controller.pulsar(false); e.controller.pulsar(false);
+  assert.equal(e.pista.enabled, false);
+  e.audio(); // The worklet tail still belongs to this turn.
+  e.capturas[0].port.onmessage({ data: "flushed" }); e.audio();
+  assert.deepEqual(e.sesiones[0].inputs.map(i => Object.keys(i)[0]), ["activityStart", "audio", "audio", "activityEnd"]);
+  e.controller.pulsar(true); assert.equal(e.pista.enabled, true);
+  e.controller.finalizar(); assert.ok(e.pista.stopped);
+});
+
+test("manual release falls back if the audio thread is suspended", async () => {
+  const e = entorno({ flushPendiente: true }); await e.iniciar({ ...base, escucha: "pulsar" });
+  e.controller.pulsar(true); e.controller.pulsar(false);
+  [...e.temporizadores.values()][0]();
+  assert.equal(Object.keys(e.sesiones[0].inputs.at(-1))[0], "activityEnd");
+  e.controller.pulsar(true); assert.equal(e.controller.getSnapshot().pulsando, true);
+  e.controller.finalizar();
+});
+
+test("worklet flush preserves the partial PCM packet exactly", async () => {
+  const e = entorno(); await e.iniciar();
+  let Clase; const packets = [];
+  runInNewContext(await e.worklet.text(), { Float32Array, AudioWorkletProcessor: class { port = { postMessage: data => packets.push(data) }; }, registerProcessor: (_, c) => { Clase = c; } });
+  const worklet = new Clase(); worklet.process([[new Float32Array([.25, -.5])]]);
+  assert.equal(packets.length, 0); worklet.port.onmessage();
+  assert.deepEqual(Array.from(packets[0]), [.25, -.5]); assert.equal(packets[1], "flushed");
+  e.controller.finalizar();
+});
+
+test("session configuration reaches the token action and the transport unchanged", async () => {
+  const c = { ...base, modo: "simulacion", papel: "huesped", tema: "Room service" };
+  const e = entorno(); await e.iniciar(c);
+  assert.deepEqual(e.solicitud.configuracion, c); assert.deepEqual(e.preferencias, c);
+  e.controller.ayudar("cambiar_papel");
+  assert.equal(e.controller.getSnapshot().papelActual, "colaborador");
+  assert.equal(e.controller.getSnapshot().mensajes.length, 0, "Internal commands are not student evidence");
+  e.controller.ayudar("explicar"); assert.equal(e.controller.getSnapshot().ayudaActiva, true);
+  e.tool("actualizar_contexto", { ayudaActiva: false, papelEstudiante: "huesped" });
+  assert.equal(e.controller.getSnapshot().ayudaActiva, false);
+  assert.equal(e.controller.getSnapshot().papelActual, "huesped");
+  e.controller.finalizar();
+});
+
+test("teacher kickoff uses the selected explanation language instead of a roleplay greeting", async () => {
+  const e = entorno(); await e.iniciar({ ...base, modo: "profesor", tema: "Do versus does" });
+  const apertura = e.sesiones[0].turns[0].turns[0].parts[0].text;
+  assert.match(apertura, /Speak in Spanish/); assert.match(apertura, /chosen learning goal/);
+  assert.doesNotMatch(apertura, /in character/); e.controller.finalizar();
+});
+
+const review = { logro: { detalle: "Expresaste lo que necesitas", evidencia: "I need a room" }, correcciones: [{ original: "I wants a room", mejora: "I want a room", explicacion: "Usa want con I" }], frase: "Could I book a room?" };
+test("ending stops the microphone immediately, validates review evidence and closes the socket", async () => {
+  const e = entorno(); await e.iniciar();
+  e.controller.enviarTexto("I need a room"); e.controller.enviarTexto("I wants a room"); e.recibir(audio);
+  e.controller.cerrarConResumen();
+  assert.ok(e.pista.stopped); assert.equal(e.controller.getSnapshot().estadoResumen, "preparando");
+  const sources = e.contextos[1].sources.length; e.recibir(audio); assert.equal(e.contextos[1].sources.length, sources);
+  e.tool("entregar_resumen", review);
+  assert.equal(e.controller.getSnapshot().estadoResumen, "listo");
+  assert.equal(e.controller.getSnapshot().resumen.correcciones.length, 1);
+  assert.ok(e.sesiones[0].closed); assert.equal(e.temporizadores.size, 0);
+});
+
+test("review rejects invented achievement evidence and filters invented error quotes", async () => {
+  assert.equal(revision.validarResumen(review, ["Something else"]), null);
+  const valid = revision.validarResumen(review, ["I need a room"]);
+  assert.equal(valid.correcciones.length, 0);
+  const e = entorno(); await e.iniciar(); e.controller.enviarTexto("Hello"); e.controller.cerrarConResumen();
+  e.tool("entregar_resumen", review);
+  assert.equal(e.controller.getSnapshot().resumen, null);
+  [...e.temporizadores.values()][0]();
+  assert.equal(e.controller.getSnapshot().estadoResumen, "no_disponible"); assert.ok(e.sesiones[0].closed);
+});
+
+test("only-on-request corrections do not trigger an unsolicited final review", async () => {
+  const e = entorno(); await e.iniciar({ ...base, correcciones: "a_peticion" });
+  e.controller.enviarTexto("Hello"); const count = e.sesiones[0].turns.length;
+  e.controller.cerrarConResumen();
+  assert.equal(e.sesiones[0].turns.length, count); assert.ok(e.sesiones[0].closed);
+  assert.equal(e.controller.getSnapshot().estadoResumen, "inactivo");
+  await e.iniciar({ ...base, correcciones: "a_peticion" }); e.controller.enviarTexto("Hello");
+  e.controller.cerrarConResumen(true); assert.equal(e.controller.getSnapshot().estadoResumen, "preparando"); e.controller.finalizar();
+});
+
+test("summary transport failure releases resources without corrupting the conversation", async () => {
+  const e = entorno(); await e.iniciar(); e.controller.enviarTexto("Hello"); e.controller.cerrarConResumen();
+  e.sesiones[0].callbacks.onerror({});
+  assert.equal(e.controller.getSnapshot().estadoResumen, "no_disponible");
+  assert.equal(e.controller.getSnapshot().estado, "finalizada");
+  assert.equal(e.controller.getSnapshot().mensajes[0].texto, "Hello");
+  assert.ok(e.sesiones[0].closed);
+});
+
+test("noise tuning uses low VAD sensitivity and manual mode disables automatic detection", () => {
+  const { configuracionLive } = cargar(new URL("../components/learning/live-config.ts", import.meta.url));
+  const automatic = configuracionLive("test", "test", base).realtimeInputConfig.automaticActivityDetection;
+  assert.equal(automatic.startOfSpeechSensitivity, "START_SENSITIVITY_LOW");
+  assert.equal(automatic.silenceDurationMs, 1200);
+  assert.equal(configuracionLive("test", "test", { ...base, escucha: "pulsar" }).realtimeInputConfig.automaticActivityDetection.disabled, true);
+});
+
+test("preferences reject unknown values and never restore conversation topics", () => {
+  const parsed = configuracion.leerPreferencias({ modo: "admin", papel: "bad", correcciones: "never", tema: "Private topic", escucha: "pulsar" });
+  assert.equal(parsed.modo, "libre"); assert.equal(parsed.papel, "colaborador"); assert.equal(parsed.tema, ""); assert.equal(parsed.escucha, "pulsar");
+});
+
+test("prompt modes are independent of the catalog and assign opposite simulation roles", () => {
+  const { construirInstruccion, buscarEscenario } = cargar(new URL("../convex/conversacionEscenarios.ts", import.meta.url));
+  const libre = construirInstruccion(undefined, "A1", base);
+  const profesor = construirInstruccion(undefined, null, { ...base, modo: "profesor" });
+  const guest = construirInstruccion(buscarEscenario("llegada_huesped"), "B1", { ...base, modo: "simulacion", papel: "huesped" });
+  const staff = construirInstruccion(undefined, "B2", { ...base, modo: "simulacion", papel: "colaborador", tema: "Parking" });
+  assert.match(libre, /friend/i); assert.match(profesor, /teacher/i);
+  assert.match(guest, /LEARNER is the hotel guest/i); assert.match(staff, /LEARNER is the hotel staff/i);
+  assert.match(staff, /Parking/);
+  assert.doesNotMatch(libre, /25 words|must use.*vocabulary/i);
 });

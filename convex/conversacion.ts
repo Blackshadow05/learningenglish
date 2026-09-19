@@ -13,7 +13,16 @@ export const crearTokenLive = action({
   args: {
     escenarioId: v.string(),
     nivel: v.union(nivelIngles, v.null()),
+    configuracion: v.optional(v.object({
+      modo: v.union(v.literal("profesor"), v.literal("libre"), v.literal("simulacion")),
+      papel: v.union(v.literal("huesped"), v.literal("colaborador")),
+      correcciones: v.union(v.literal("durante"), v.literal("al_final"), v.literal("a_peticion")),
+      idiomaAyuda: v.union(v.literal("espanol"), v.literal("ingles")),
+      escucha: v.union(v.literal("automatica"), v.literal("pulsar")),
+      tema: v.string(),
+    })),
   },
+  returns: v.object({ token: v.string(), modelo: v.string(), voz: v.string(), instruccion: v.string() }),
   handler: async (_ctx, args) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -22,8 +31,15 @@ export const crearTokenLive = action({
       );
     }
     const escenario = buscarEscenario(args.escenarioId);
-    if (!escenario) {
+    if ((args.configuracion?.tema.length ?? 0) > 300) {
+      throw new Error("El tema o situación debe tener como máximo 300 caracteres.");
+    }
+    const esSimulacion = !args.configuracion || args.configuracion.modo === "simulacion";
+    if (esSimulacion && !escenario && args.escenarioId !== "personalizado") {
       throw new Error("El escenario de conversación no existe.");
+    }
+    if (esSimulacion && args.escenarioId === "personalizado" && !args.configuracion?.tema.trim()) {
+      throw new Error("Describe la situación que quieres practicar.");
     }
     const modelo = process.env.GEMINI_MODELO_LIVE ?? "gemini-3.8-live";
     const voz = process.env.GEMINI_VOZ_LIVE ?? "Zephyr";
@@ -48,7 +64,7 @@ export const crearTokenLive = action({
       token: token.name,
       modelo,
       voz,
-      instruccion: construirInstruccion(escenario, args.nivel),
+      instruccion: construirInstruccion(escenario, args.nivel, args.configuracion),
     };
   },
 });

@@ -2,36 +2,21 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useAction } from "convex/react";
-import { ActivityHandling, EndSensitivity, GoogleGenAI, Modality, StartSensitivity } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { api } from "../../convex/_generated/api";
 import { ConversacionLive } from "./live-session";
+import { configuracionLive } from "./live-config";
 
 export function useConversacionEnVivo() {
   const crearToken = useAction(api.conversacion.crearTokenLive);
   const [conversacion] = useState(() => new ConversacionLive({
     crearToken,
-    conectar: (datos, callbacks) => new GoogleGenAI({
+    conectar: (datos, callbacks, preferencias) => new GoogleGenAI({
       apiKey: datos.token,
       apiVersion: "v1alpha",
     }).live.connect({
       model: datos.modelo,
-      config: {
-        responseModalities: [Modality.AUDIO],
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
-        systemInstruction: { parts: [{ text: datos.instruccion }] },
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: datos.voz } } },
-        realtimeInputConfig: {
-          activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-          automaticActivityDetection: {
-            disabled: false,
-            startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
-            endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
-            prefixPaddingMs: 100,
-            silenceDurationMs: 800,
-          },
-        },
-      },
+      config: configuracionLive(datos.instruccion, datos.voz, preferencias),
       callbacks,
     }),
   }));
@@ -53,5 +38,8 @@ export function useConversacionEnVivo() {
     finalizar: conversacion.finalizar,
     enviarTexto: conversacion.enviarTexto,
     silenciar: conversacion.silenciar,
+    pulsar: conversacion.pulsar,
+    ayudar: conversacion.ayudar,
+    cerrarConResumen: conversacion.cerrarConResumen,
   };
 }

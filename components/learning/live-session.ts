@@ -1,12 +1,14 @@
 import type { LiveCallbacks, LiveServerMessage, Session } from "@google/genai";
+import { CONFIGURACION_INICIAL, type ConfiguracionPractica, type AccionAyuda, type PapelEstudiante, type ResumenPractica } from "../../lib/practice-config";
+import { validarResumen } from "../../lib/practice-review";
 
 export type EstadoConversacion = "inactivo" | "conectando" | "en_vivo" | "finalizada" | "error";
 export type MensajeConversacion = { id: number; rol: "estudiante" | "tutor"; texto: string };
 type Nivel = "sin_evaluar" | "A1" | "A2" | "B1" | "B2" | "C1" | "C2";
 type DatosSesion = { token: string; modelo: string; instruccion: string; voz: string };
 type Dependencias = {
-  crearToken: (args: { escenarioId: string; nivel: Nivel | null }) => Promise<DatosSesion>;
-  conectar: (datos: DatosSesion, callbacks: LiveCallbacks) => Promise<Session>;
+  crearToken: (args: { escenarioId: string; nivel: Nivel | null; configuracion: ConfiguracionPractica }) => Promise<DatosSesion>;
+  conectar: (datos: DatosSesion, callbacks: LiveCallbacks, configuracion: ConfiguracionPractica) => Promise<Session>;
 };
 type Snapshot = {
   estado: EstadoConversacion;
@@ -18,6 +20,12 @@ type Snapshot = {
   esperandoRespuesta: boolean;
   inicio: number | null;
   fin: number | null;
+  configuracion: ConfiguracionPractica;
+  papelActual: PapelEstudiante;
+  ayudaActiva: boolean;
+  pulsando: boolean;
+  resumen: ResumenPractica | null;
+  estadoResumen: "inactivo" | "preparando" | "listo" | "no_disponible";
 };
 type Recursos = {
   sesion: Session | null;
@@ -32,17 +40,29 @@ type Recursos = {
   medidor?: ReturnType<typeof setInterval>;
   ultimaVoz: number;
   transcripciones: Partial<Record<MensajeConversacion["rol"], number>>;
+  pulsacion: boolean;
+  soltando: boolean;
+  cierrePulsacion?: ReturnType<typeof setTimeout>;
+  cerrando: boolean;
 };
 
 const INICIAL: Snapshot = {
   estado: "inactivo", mensajes: [], error: "", micSilenciado: false,
   tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false, inicio: null, fin: null,
+  configuracion: CONFIGURACION_INICIAL, papelActual: "colaborador", ayudaActiva: false, pulsando: false,
+  resumen: null, estadoResumen: "inactivo",
 };
 
 // About 64ms per packet at 16kHz; output stays silent to avoid microphone feedback.
 const WORKLET = `
 class CapturaPcm extends AudioWorkletProcessor {
-  constructor() { super(); this.buffer = new Float32Array(1024); this.offset = 0; }
+  constructor() {
+    super(); this.buffer = new Float32Array(1024); this.offset = 0;
+    this.port.onmessage = () => {
+      if (this.offset) { const tail = this.buffer.slice(0, this.offset); this.port.postMessage(tail, [tail.buffer]); this.offset = 0; }
+      this.port.postMessage("flushed");
+    };
+  }
   process(inputs) {
     const channel = inputs[0]?.[0];
     if (channel) for (const value of channel) {
@@ -120,6 +140,7 @@ export class ConversacionLive {
     this.actual = null;
     if (!r) return;
     clearTimeout(r.timeout);
+    clearTimeout(r.cierrePulsacion);
     clearInterval(r.medidor);
     this.pararReproduccion(r);
     if (r.captura) {
@@ -137,13 +158,86 @@ export class ConversacionLive {
 
   private fallar(r: Recursos, error: string) {
     if (this.actual !== r) return;
+    if (r.cerrando) { this.finalizar(); this.actualizar({ estadoResumen: "no_disponible" }); return; }
     this.liberar();
     this.actualizar({ estado: "error", error, fin: Date.now(), tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false });
   }
 
   finalizar = () => {
     this.liberar();
-    this.actualizar({ estado: "finalizada", fin: this.snapshot.fin ?? Date.now(), tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false });
+    this.actualizar({ estado: "finalizada", fin: this.snapshot.fin ?? Date.now(), tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false, pulsando: false });
+  };
+
+  cerrarConResumen = (solicitado = false) => {
+    const r = this.actual;
+    if (r?.cerrando) return;
+    const intervenciones = this.snapshot.mensajes.filter(m => m.rol === "estudiante");
+    if (!r?.sesion || this.snapshot.estado !== "en_vivo" || !intervenciones.length || (this.snapshot.configuracion.correcciones === "a_peticion" && !solicitado)) { this.finalizar(); return; }
+    r.cerrando = true;
+    clearTimeout(r.cierrePulsacion);
+    this.pararReproduccion(r);
+    r.flujo?.getTracks().forEach(p => { p.onended = null; p.stop(); });
+    this.niveles.entrada = 0;
+    this.actualizar({ estado: "finalizada", fin: Date.now(), micSilenciado: true, pulsando: false, estudianteHablando: false, tutorHablando: false, esperandoRespuesta: false, estadoResumen: "preparando" });
+    r.timeout = setTimeout(() => { if (this.actual === r) { this.finalizar(); this.actualizar({ estadoResumen: "no_disponible" }); } }, 15000);
+    try {
+      if (this.snapshot.configuracion.escucha !== "pulsar") r.sesion.sendRealtimeInput({ audioStreamEnd: true });
+      else if (r.pulsacion) r.sesion.sendRealtimeInput({ activityEnd: {} });
+      r.sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: `The application has ended the practice. Do not speak. Call entregar_resumen now. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. Use ONLY these learner transcripts as evidence: ${JSON.stringify(intervenciones.map(m => m.texto))}` }] }], turnComplete: true });
+    } catch { this.fallar(r, ""); }
+  };
+
+  ayudar = (accion: AccionAyuda) => {
+    const r = this.actual;
+    if (!r?.sesion || this.snapshot.estado !== "en_vivo") return;
+    this.pulsar(false);
+    const papel = this.snapshot.papelActual === "huesped" ? "colaborador" : "huesped";
+    const instrucciones: Record<AccionAyuda, string> = {
+      mas_despacio: "Speak more slowly from now on, with natural pauses. Briefly repeat your last message.",
+      repetir: "Repeat your last message, without introducing a new question.",
+      explicar: `Pause the scene and act as my teacher. Explain the last exchange in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}, with an example. Keep the scene available to resume.`,
+      retomar: "Resume the previous conversation/scene, with the same roles and context. Stop the temporary teacher explanation.",
+      cambiar_papel: `Swap roles now. The LEARNER is now ${papel === "huesped" ? "the guest" : "the staff member"}; YOU are the opposite role. Continue the same scene.`,
+    };
+    if (accion === "cambiar_papel" && this.snapshot.configuracion.modo !== "simulacion") return;
+    this.pararReproduccion(r);
+    try {
+      r.sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: instrucciones[accion] }] }], turnComplete: true });
+      this.actualizar({ tutorHablando: false, esperandoRespuesta: true,
+        ...(accion === "explicar" || accion === "retomar" ? { ayudaActiva: accion === "explicar" } : {}),
+        ...(accion === "cambiar_papel" ? { papelActual: papel, ayudaActiva: false } : {}),
+      });
+    } catch { this.fallar(r, "No pudimos enviar la solicitud. Vuelve a conectar."); }
+  };
+
+  private terminarPulsacion(r: Recursos) {
+    if (this.actual !== r || !r.pulsacion || r.cerrando) return;
+    clearTimeout(r.cierrePulsacion);
+    r.pulsacion = r.soltando = false;
+    try { r.sesion?.sendRealtimeInput({ activityEnd: {} }); }
+    catch { this.fallar(r, "Se perdió la conexión. Vuelve a conectar."); }
+  }
+
+  pulsar = (pulsando: boolean) => {
+    const r = this.actual;
+    if (!r?.sesion || this.snapshot.estado !== "en_vivo" || this.snapshot.configuracion.escucha !== "pulsar") return;
+    if (pulsando) {
+      if (r.pulsacion) return;
+      try { r.sesion.sendRealtimeInput({ activityStart: {} }); }
+      catch { this.fallar(r, "Se perdió la conexión. Vuelve a conectar."); return; }
+      r.pulsacion = true;
+      this.pararReproduccion(r);
+      r.flujo?.getAudioTracks().forEach(p => { p.enabled = true; });
+      this.actualizar({ pulsando: true, micSilenciado: false, tutorHablando: false, esperandoRespuesta: false });
+    } else if (r.pulsacion && !r.soltando) {
+      r.soltando = true;
+      r.flujo?.getAudioTracks().forEach(p => { p.enabled = false; });
+      this.niveles.entrada = 0;
+      this.actualizar({ pulsando: false, micSilenciado: true, estudianteHablando: false, esperandoRespuesta: true });
+      // Flush the final partial packet before activityEnd; fall back if the audio thread is suspended.
+      r.cierrePulsacion = setTimeout(() => this.terminarPulsacion(r), 250);
+      r.captura?.port.postMessage("flush");
+    }
   };
 
   private transcribir(r: Recursos, rol: MensajeConversacion["rol"], texto?: string, final = false) {
@@ -189,6 +283,25 @@ export class ConversacionLive {
 
   private recibir(r: Recursos, mensaje: LiveServerMessage) {
     if (this.actual !== r) return;
+    for (const llamada of mensaje.toolCall?.functionCalls ?? []) {
+      let respuesta: Record<string, unknown> = { error: "Unsupported request" };
+      if (llamada.name === "entregar_resumen" && r.cerrando) {
+        const resumen = validarResumen(llamada.args, this.snapshot.mensajes.filter(m => m.rol === "estudiante").map(m => m.texto));
+        if (resumen) {
+          r.sesion?.sendToolResponse({ functionResponses: [{ id: llamada.id, name: llamada.name, response: { ok: true } }] });
+          this.finalizar(); this.actualizar({ resumen, estadoResumen: "listo" }); return;
+        }
+        respuesta = { error: "Use verbatim learner quotes from the supplied transcript. Retry with valid evidence." };
+      } else if (llamada.name === "actualizar_contexto" && !r.cerrando) {
+        const { ayudaActiva, papelEstudiante } = llamada.args ?? {};
+        if (typeof ayudaActiva === "boolean" && (papelEstudiante === "huesped" || papelEstudiante === "colaborador")) {
+          this.actualizar({ ayudaActiva, ...(this.snapshot.configuracion.modo === "simulacion" ? { papelActual: papelEstudiante } : {}) });
+          respuesta = { ok: true, papelEstudiante: this.snapshot.papelActual, ayudaActiva };
+        }
+      }
+      r.sesion?.sendToolResponse({ functionResponses: [{ id: llamada.id, name: llamada.name, response: respuesta }] });
+    }
+    if (r.cerrando) return;
     const contenido = mensaje.serverContent;
     if (!contenido) return;
     if (contenido.interrupted) {
@@ -212,13 +325,13 @@ export class ConversacionLive {
   }
 
   private capturar(r: Recursos, muestras: Float32Array) {
-    if (this.actual !== r || !r.sesion || this.snapshot.micSilenciado) return;
+    if (this.actual !== r || !r.sesion || r.cerrando || (this.snapshot.configuracion.escucha === "pulsar" ? !r.pulsacion : this.snapshot.micSilenciado)) return;
     let energia = 0;
     for (const muestra of muestras) energia += muestra * muestra;
     const rms = Math.sqrt(energia / muestras.length);
-    this.niveles.entrada = Math.min(1, rms * 9);
-    if (rms > 0.015) r.ultimaVoz = performance.now();
-    const hablando = performance.now() - r.ultimaVoz < 800;
+    this.niveles.entrada = r.soltando ? 0 : Math.min(1, rms * 9);
+    if (rms > 0.025) r.ultimaVoz = performance.now();
+    const hablando = !r.soltando && performance.now() - r.ultimaVoz < 800;
     if (hablando !== this.snapshot.estudianteHablando) {
       this.actualizar({ estudianteHablando: hablando, esperandoRespuesta: !hablando && !this.snapshot.tutorHablando });
     }
@@ -231,6 +344,7 @@ export class ConversacionLive {
 
   silenciar = (silenciado: boolean) => {
     const r = this.actual;
+    if (this.snapshot.configuracion.escucha === "pulsar") { if (silenciado) this.pulsar(false); return; }
     if (!r?.sesion || this.snapshot.estado !== "en_vivo" || silenciado === this.snapshot.micSilenciado) return;
     // Disable the track as well as upload: switching to text must really mute capture.
     r.flujo?.getAudioTracks().forEach((pista) => { pista.enabled = !silenciado; });
@@ -261,14 +375,14 @@ export class ConversacionLive {
     }
   };
 
-  iniciar = async (escenarioId: string, nivel: string | null) => {
+  iniciar = async (escenarioId: string, nivel: string | null, configuracion: ConfiguracionPractica = CONFIGURACION_INICIAL) => {
     if (this.actual) return;
     const r: Recursos = {
       sesion: null, contexto: null, reproduccion: null, flujo: null, captura: null, analizador: null,
-      fuentes: new Set(), proximoInicio: 0, ultimaVoz: -Infinity, transcripciones: {},
+      fuentes: new Set(), proximoInicio: 0, ultimaVoz: -Infinity, transcripciones: {}, pulsacion: false, soltando: false, cerrando: false,
     };
     this.actual = r;
-    this.actualizar({ ...INICIAL, mensajes: [], estado: "conectando" });
+    this.actualizar({ ...INICIAL, mensajes: [], estado: "conectando", configuracion: { ...configuracion }, papelActual: configuracion.papel, micSilenciado: configuracion.escucha === "pulsar" });
     r.timeout = setTimeout(() => this.fallar(r, "La conexión está tardando demasiado. Revisa el permiso del micrófono y tu conexión e inténtalo de nuevo."), 30000);
     let preparandoAudio = true;
     try {
@@ -283,13 +397,14 @@ export class ConversacionLive {
       const desbloqueo = Promise.all([r.contexto.resume(), r.reproduccion.resume()]);
       void desbloqueo.catch(() => {});
       const flujo = await navigator.mediaDevices.getUserMedia({ audio: {
-        channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+        channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false,
       } });
       if (this.actual !== r) { flujo.getTracks().forEach((pista) => pista.stop()); return; }
       r.flujo = flujo;
       await desbloqueo;
       if (this.actual !== r) return;
       flujo.getAudioTracks().forEach((pista) => {
+        pista.enabled = configuracion.escucha !== "pulsar";
         pista.onended = () => this.fallar(r, "El micrófono se desconectó. Revísalo y vuelve a conectar.");
       });
       const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
@@ -297,7 +412,10 @@ export class ConversacionLive {
       finally { URL.revokeObjectURL(url); }
       if (this.actual !== r) return;
       r.captura = new AudioWorkletNode(r.contexto, "captura-pcm");
-      r.captura.port.onmessage = (evento: MessageEvent<Float32Array>) => this.capturar(r, evento.data);
+      r.captura.port.onmessage = (evento: MessageEvent<Float32Array | "flushed">) => {
+        if (evento.data === "flushed") { if (r.soltando) this.terminarPulsacion(r); }
+        else this.capturar(r, evento.data);
+      };
       r.contexto.createMediaStreamSource(flujo).connect(r.captura);
       r.captura.connect(r.contexto.destination);
       r.analizador = r.reproduccion.createAnalyser();
@@ -310,7 +428,7 @@ export class ConversacionLive {
       }, 50);
       preparandoAudio = false;
       const nivelValido = ["sin_evaluar", "A1", "A2", "B1", "B2", "C1", "C2"].includes(nivel ?? "") ? nivel as Nivel : null;
-      const datos = await this.dependencias.crearToken({ escenarioId, nivel: nivelValido });
+      const datos = await this.dependencias.crearToken({ escenarioId, nivel: nivelValido, configuracion });
       if (this.actual !== r) return;
       const sesion = await this.dependencias.conectar(datos, {
         onmessage: (mensaje) => {
@@ -319,14 +437,17 @@ export class ConversacionLive {
         },
         onerror: () => this.fallar(r, "No pudimos mantener la conexión de voz. Inténtalo de nuevo."),
         onclose: () => this.fallar(r, "La conexión de voz terminó. Puedes iniciar una nueva conversación."),
-      });
+      }, configuracion);
       if (this.actual !== r) { sesion.close(); return; }
       r.sesion = sesion;
       clearTimeout(r.timeout);
       this.actualizar({ estado: "en_vivo", inicio: Date.now(), esperandoRespuesta: true });
       // System instructions alone do not trigger a spoken greeting.
+      const apertura = configuracion.modo === "profesor"
+        ? `Begin our lesson now. Speak in ${configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"} for your greeting and explanations, and English only for practice examples. ${configuracion.tema.trim() ? "Start with a brief explanation and example about my chosen learning goal." : "Ask what I would like to learn."} Then wait for me.`
+        : "Begin our conversation now, following the assigned mode and roles. Use a natural short English opening related to the chosen topic or situation, then wait for me.";
       sesion.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: "Begin the practice now. Greet me briefly in character and ask your first question, then wait for my answer." }] }],
+        turns: [{ role: "user", parts: [{ text: apertura }] }],
         turnComplete: true,
       });
     } catch (error) {
