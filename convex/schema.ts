@@ -11,7 +11,7 @@ export const nivelIngles = v.union(
   v.literal("C2")
 );
 
-export const proveedorVoz = v.union(v.literal("openai"), v.literal("gemini"));
+export const proveedorVoz = v.union(v.literal("openai"), v.literal("gemini"), v.literal("mini"));
 
 export const estadoDominio = v.union(
   v.literal("nuevo"),
@@ -375,4 +375,13 @@ export default defineSchema({
     permitirGrabacionAudio: v.boolean(),
     actualizadoEn: v.number(),
   }).index("por_usuario", ["usuarioId"]),
+
+  // Compact voice-practice memory: only a tiny summary per session, never transcripts.
+  progresoConversaciones: defineTable({
+    usuarioId: v.optional(v.id("usuarios")),
+    nivel: nivelIngles,
+    aprendidas: v.array(v.string()),
+    porPracticar: v.array(v.string()),
+    creadoEn: v.number(),
+  }).index("por_usuario_y_fecha", ["usuarioId", "creadoEn"]),
 });

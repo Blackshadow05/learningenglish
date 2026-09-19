@@ -7,7 +7,12 @@ import styles from "./practice.module.css";
 
 const CLAVE = "bloom.voice.preferences.v1";
 const CLAVE_PROVEEDOR = "bloom.voice.provider.v1";
-export type ProveedorVoz = "gemini" | "openai";
+export type ProveedorVoz = "gemini" | "openai" | "mini";
+const PROVEEDORES: { id: ProveedorVoz; nombre: string; pista: string }[] = [
+  { id: "gemini", nombre: "Gemini 3.8 Live", pista: "Voz de Google en tiempo real." },
+  { id: "openai", nombre: "GPT Live 1", pista: "Voz de OpenAI en tiempo real." },
+  { id: "mini", nombre: "Realtime Mini", pista: "Voz ligera de OpenAI, la más económica." },
+];
 export function usePreferenciasVoz() {
   const [configuracion, setConfiguracion] = useState<ConfiguracionPractica>(CONFIGURACION_INICIAL);
   const [proveedor, setProveedor] = useState<ProveedorVoz>("gemini");
@@ -16,7 +21,7 @@ export function usePreferenciasVoz() {
     queueMicrotask(() => {
       if (!activa) return;
       try { setConfiguracion(leerPreferencias(JSON.parse(localStorage.getItem(CLAVE) ?? "null"))); } catch { /* Optional device storage. */ }
-      try { const guardado = localStorage.getItem(CLAVE_PROVEEDOR); if (guardado === "openai" || guardado === "gemini") setProveedor(guardado); } catch { /* Optional device storage. */ }
+      try { const guardado = localStorage.getItem(CLAVE_PROVEEDOR); if (guardado === "openai" || guardado === "gemini" || guardado === "mini") setProveedor(guardado); } catch { /* Optional device storage. */ }
     });
     return () => { activa = false; };
   }, []);
@@ -46,10 +51,9 @@ export function PracticeSettings({ configuracion: c, cambiar, proveedor, cambiar
     <div className={styles.scenario}>
       <p className={styles.fieldLabel}>VOZ DEL TUTOR</p>
       <div className={styles.roles} role="group" aria-label="Modelo de voz del tutor">
-        <button aria-pressed={proveedor === "gemini"} onClick={() => cambiarProveedor("gemini")}>Gemini 3.8 Live</button>
-        <button aria-pressed={proveedor === "openai"} onClick={() => cambiarProveedor("openai")}>GPT Live 1</button>
+        {PROVEEDORES.map(p => <button key={p.id} aria-pressed={proveedor === p.id} onClick={() => cambiarProveedor(p.id)}>{p.nombre}</button>)}
       </div>
-      <p className={styles.roleHint}>{proveedor === "gemini" ? "Voz de Google en tiempo real." : "Voz de OpenAI en tiempo real."}</p>
+      <p className={styles.roleHint}>{PROVEEDORES.find(p => p.id === proveedor)?.pista}</p>
     </div>
     {c.modo === "simulacion" && <div className={styles.scenario}>
       <p className={styles.fieldLabel}>TU PAPEL</p>

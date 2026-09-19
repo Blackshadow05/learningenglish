@@ -1,5 +1,5 @@
 import type { LiveCallbacks, LiveServerMessage, Session } from "@google/genai";
-import { CONFIGURACION_INICIAL, type ConfiguracionPractica, type AccionAyuda, type PapelEstudiante, type ResumenPractica } from "../../lib/practice-config";
+import { CONFIGURACION_INICIAL, MINUTOS_SESION_VOZ, type ConfiguracionPractica, type AccionAyuda, type PapelEstudiante, type ResumenPractica } from "../../lib/practice-config";
 import { validarResumen } from "../../lib/practice-review";
 
 export type EstadoConversacion = "inactivo" | "conectando" | "en_vivo" | "finalizada" | "error";
@@ -206,7 +206,7 @@ export class ConversacionLive {
     try {
       if (this.snapshot.configuracion.escucha !== "pulsar") r.sesion.sendRealtimeInput({ audioStreamEnd: true });
       else if (r.pulsacion) r.sesion.sendRealtimeInput({ activityEnd: {} });
-      this.enviarAlBackend(r.sesion, `The application has ended the practice. Do not speak. Call entregar_resumen now. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. Use ONLY these learner transcripts as evidence: ${JSON.stringify(intervenciones.map(m => m.texto))}`);
+      this.enviarAlBackend(r.sesion, `The application has ended the practice. Do not speak. First call guardar_progreso if that tool is available (quote only verbatim learner words; empty arrays are valid). Then call entregar_resumen now if it is available. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. Use ONLY these learner transcripts as evidence: ${JSON.stringify(intervenciones.map(m => m.texto))}`);
     } catch { this.fallar(r, ""); }
   };
 
@@ -478,6 +478,8 @@ export class ConversacionLive {
       if (this.actual !== r) { sesion.close(); return; }
       r.sesion = sesion;
       clearTimeout(r.timeout);
+      // Sessions are designed for 10-15 minutes; end them automatically with a summary.
+      r.timeout = setTimeout(() => { if (this.actual === r) this.cerrarConResumen(); }, MINUTOS_SESION_VOZ * 60 * 1000);
       this.actualizar({ estado: "en_vivo", inicio: Date.now(), esperandoRespuesta: true });
       // System instructions alone do not trigger a spoken greeting.
       const apertura = configuracion.modo === "profesor"

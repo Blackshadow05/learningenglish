@@ -7,6 +7,7 @@ import { Icon } from "./icons";
 import { useLearning } from "./learning-provider";
 import { useConversacionEnVivo } from "./live-conversation";
 import { useConversacionOpenAI } from "./live-conversation-openai";
+import { useConversacionMini } from "./live-conversation-mini";
 import type { MensajeConversacion } from "./live-session";
 import { NOMBRES_MODO } from "../../lib/practice-config";
 import { PracticeSettings, usePreferenciasVoz, type ProveedorVoz } from "./practice-settings";
@@ -123,7 +124,7 @@ function SalaVoz({ conversacion, titulo, proveedor, terminar, reintentar }: {
         <div className={styles.roomBrand}><span className="brand-mark"><i/><i/><i/><i/></span><span>bloom<span className={styles.brandDot}>.</span><small>Modo de voz</small></span></div>
         <button className={styles.captionButton} type="button" aria-label={subtitulos ? "Ocultar transcripción" : "Mostrar transcripción"} aria-pressed={subtitulos} aria-controls="voice-transcript" onClick={() => setSubtitulos(!subtitulos)}><Icon name="captions" size={23}/></button>
       </header>
-      <div className={styles.sessionMeta}><span><Icon name="headphones" size={14}/>{titulo}</span><span><Icon name="sparkles" size={14}/>{proveedor === "openai" ? "GPT Live 1" : "Gemini 3.8 Live"}</span><Duracion inicio={inicio} fin={fin}/></div>
+      <div className={styles.sessionMeta}><span><Icon name="headphones" size={14}/>{titulo}</span><span><Icon name="sparkles" size={14}/>{proveedor === "mini" ? "Realtime Mini" : proveedor === "openai" ? "GPT Live 1" : "Gemini 3.8 Live"}</span><Duracion inicio={inicio} fin={fin}/></div>
       <div className={styles.contextBadge}>{conversacion.ayudaActiva ? "Pausa para aprender · Bloom es tu profesor" : conversacion.configuracion.modo === "simulacion" ? `Tú: ${conversacion.papelActual === "huesped" ? "huésped" : "colaborador"} · Bloom: ${conversacion.papelActual === "huesped" ? "colaborador" : "huésped"}` : NOMBRES_MODO[conversacion.configuracion.modo]}</div>
       <div className={styles.stage}>
         <Esfera fase={fase} niveles={niveles}/>
@@ -176,8 +177,9 @@ export function Practice() {
   const escenarios = useQuery(api.escenarios.listar);
   const gemini = useConversacionEnVivo();
   const openai = useConversacionOpenAI();
+  const mini = useConversacionMini();
   const { configuracion, cambiar, proveedor, cambiarProveedor } = usePreferenciasVoz();
-  const conversacion = proveedor === "openai" ? openai : gemini;
+  const conversacion = proveedor === "mini" ? mini : proveedor === "openai" ? openai : gemini;
   const [escenarioId, setEscenarioId] = useState("");
   const [salaAbierta, setSalaAbierta] = useState(false);
   const [resumen, setResumen] = useState<{ duracion: number; turnos: number } | null>(null);

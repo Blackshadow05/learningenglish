@@ -15,6 +15,9 @@ export const CONFIGURACION_INICIAL: ConfiguracionPractica = {
   idiomaAyuda: "espanol", escucha: "automatica", tema: "",
 };
 
+// Voice sessions are meant to last 10-15 minutes; end them automatically.
+export const MINUTOS_SESION_VOZ = 15;
+
 export const MODOS_PRACTICA = [
   { id: "libre", titulo: "Conversar", descripcion: "Cualquier tema, a tu ritmo.", icono: "headphones" },
   { id: "profesor", titulo: "Aprender", descripcion: "Explicaciones, ejemplos y ayuda.", icono: "book" },

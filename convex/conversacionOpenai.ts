@@ -43,7 +43,8 @@ function construirSesion(escenarioId: string, nivel: string | null, configuracio
   const escenario = validarSolicitud(escenarioId, configuracion);
   const modelo = process.env.OPENAI_MODELO_LIVE ?? "gpt-live-1";
   const voz = process.env.OPENAI_VOZ_LIVE ?? "marin";
-  const modeloBackend = process.env.OPENAI_MODELO_BACKEND ?? "gpt-5.6-terra";
+  const modeloBackend = process.env.OPENAI_MODELO_BACKEND ?? "gpt-5.6-luna";
+  const esfuerzoBackend = process.env.OPENAI_ESFUERZO_BACKEND ?? "medium";
   const instruccion = `${construirInstruccion(escenario, nivel, configuracion)}\n${INSTRUCCION_HERRAMIENTAS_OPENAI}`;
   return {
     modelo,
@@ -58,6 +59,7 @@ function construirSesion(escenarioId: string, nivel: string | null, configuracio
         responses: {
           model: modeloBackend,
           instructions: INSTRUCCION_BACKEND_RESUMEN,
+          reasoning: { effort: esfuerzoBackend },
           tools: [
             {
               type: "function",

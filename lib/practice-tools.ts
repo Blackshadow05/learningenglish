@@ -10,6 +10,19 @@ export const INSTRUCCION_HERRAMIENTAS =
 export const INSTRUCCION_HERRAMIENTAS_OPENAI =
   "The application controls teaching pauses, scene resumption and role swaps by sending you app instructions; follow them. Handle all conversation yourself: never delegate greetings, answers, questions, corrections, hints or small talk. The backend has exactly one ability: submitting the final practice review when the application explicitly asks for it; delegate only that request, without speaking, so the backend can submit the review.";
 
+export const DESCRIPCION_GUARDAR_PROGRESO =
+  "Save the learner's compact practice progress when the application asks at the end of the session. Include only English words and phrases the learner actually used correctly (learned) and the exact phrases that still need practice (needsPractice). Quote verbatim learner words only; never invent evidence.";
+
+export const ESQUEMA_GUARDAR_PROGRESO: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    level: { type: "string", enum: ["sin_evaluar", "A1", "A2", "B1", "B2", "C1", "C2"] },
+    learned: { type: "array", maxItems: 10, items: { type: "string" } },
+    needsPractice: { type: "array", maxItems: 10, items: { type: "string" } },
+  },
+  required: ["level", "learned", "needsPractice"],
+};
+
 export const INSTRUCCION_BACKEND_RESUMEN =
   "You are the backend of a spoken English practice session. The application asks for the final practice review through user messages. When that request arrives, call entregar_resumen exactly once, quoting the learner's own words from the conversation context as evidence and following the requested explanation language. Never invent errors, evidence, scores or pronunciation judgments.";
 
