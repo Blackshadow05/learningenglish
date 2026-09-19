@@ -4,14 +4,15 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { ConversacionLive } from "./live-session";
-import { conectarRealtimeOpenAI } from "./openai-realtime";
+import { conectarGptLive } from "./gpt-live";
 import type { Conversacion } from "./live-conversation";
 
 export function useConversacionOpenAI(): Conversacion {
-  const crearToken = useAction(api.conversacionOpenai.crearTokenRealtime);
+  const prepararSesion = useAction(api.conversacionOpenai.prepararSesionLive);
+  const crearSesionWebrtc = useAction(api.conversacionOpenai.crearSesionWebrtc);
   const [conversacion] = useState(() => new ConversacionLive({
-    crearToken,
-    conectar: (datos, callbacks, preferencias, transporte) => conectarRealtimeOpenAI(datos, callbacks, preferencias, transporte),
+    crearToken: (args) => prepararSesion(args),
+    conectar: (datos, callbacks, _preferencias, transporte) => conectarGptLive(datos, callbacks, transporte, (args) => crearSesionWebrtc(args)),
   }));
   const snapshot = useSyncExternalStore(conversacion.subscribe, conversacion.getSnapshot, conversacion.getSnapshot);
 

@@ -5,11 +5,15 @@ import { validarResumen } from "../../lib/practice-review";
 export type EstadoConversacion = "inactivo" | "conectando" | "en_vivo" | "finalizada" | "error";
 export type MensajeConversacion = { id: number; rol: "estudiante" | "tutor"; texto: string };
 type Nivel = "sin_evaluar" | "A1" | "A2" | "B1" | "B2" | "C1" | "C2";
-type DatosSesion = { token: string; modelo: string; instruccion: string; voz: string };
+type DatosSesion = { token: string; modelo: string; instruccion: string; voz: string; sesionJson?: string };
 type RecursosTransporte = { flujo: MediaStream | null; salida: (flujoRemoto: MediaStream) => void };
 type Dependencias = {
   crearToken: (args: { escenarioId: string; nivel: Nivel | null; configuracion: ConfiguracionPractica }) => Promise<DatosSesion>;
   conectar: (datos: DatosSesion, callbacks: LiveCallbacks, configuracion: ConfiguracionPractica, transporte?: RecursosTransporte) => Promise<Session>;
+};
+type SesionExtendida = Session & {
+  agregarInstruccion?: (texto: string) => void;
+  agregarMensajeUsuario?: (texto: string) => void;
 };
 type Snapshot = {
   estado: EstadoConversacion;
@@ -124,6 +128,24 @@ export class ConversacionLive {
     this.listeners.forEach((listener) => listener());
   }
 
+  private instruir(sesion: Session, texto: string) {
+    const extendida = sesion as SesionExtendida;
+    if (extendida.agregarInstruccion) {
+      extendida.agregarInstruccion(texto);
+      return;
+    }
+    sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: texto }] }], turnComplete: true });
+  }
+
+  private enviarAlBackend(sesion: Session, texto: string) {
+    const extendida = sesion as SesionExtendida;
+    if (extendida.agregarMensajeUsuario) {
+      extendida.agregarMensajeUsuario(texto);
+      return;
+    }
+    sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: texto }] }], turnComplete: true });
+  }
+
   private pararReproduccion(r: Recursos) {
     for (const fuente of r.fuentes) {
       fuente.onended = null;
@@ -184,7 +206,7 @@ export class ConversacionLive {
     try {
       if (this.snapshot.configuracion.escucha !== "pulsar") r.sesion.sendRealtimeInput({ audioStreamEnd: true });
       else if (r.pulsacion) r.sesion.sendRealtimeInput({ activityEnd: {} });
-      r.sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: `The application has ended the practice. Do not speak. Call entregar_resumen now. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. Use ONLY these learner transcripts as evidence: ${JSON.stringify(intervenciones.map(m => m.texto))}` }] }], turnComplete: true });
+      this.enviarAlBackend(r.sesion, `The application has ended the practice. Do not speak. Call entregar_resumen now. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. Use ONLY these learner transcripts as evidence: ${JSON.stringify(intervenciones.map(m => m.texto))}`);
     } catch { this.fallar(r, ""); }
   };
 
@@ -203,7 +225,7 @@ export class ConversacionLive {
     if (accion === "cambiar_papel" && this.snapshot.configuracion.modo !== "simulacion") return;
     this.pararReproduccion(r);
     try {
-      r.sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: instrucciones[accion] }] }], turnComplete: true });
+      this.instruir(r.sesion, instrucciones[accion]);
       this.actualizar({ tutorHablando: false, esperandoRespuesta: true,
         ...(accion === "explicar" || accion === "retomar" ? { ayudaActiva: accion === "explicar" } : {}),
         ...(accion === "cambiar_papel" ? { papelActual: papel, ayudaActiva: false } : {}),
@@ -373,7 +395,7 @@ export class ConversacionLive {
     this.pararReproduccion(r);
     r.transcripciones = {};
     try {
-      r.sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: limpio }] }], turnComplete: true });
+      this.enviarAlBackend(r.sesion, limpio);
       this.transcribir(r, "estudiante", limpio, true);
       this.actualizar({ esperandoRespuesta: true, tutorHablando: false });
       return true;
@@ -459,12 +481,9 @@ export class ConversacionLive {
       this.actualizar({ estado: "en_vivo", inicio: Date.now(), esperandoRespuesta: true });
       // System instructions alone do not trigger a spoken greeting.
       const apertura = configuracion.modo === "profesor"
-        ? `Begin our lesson now. Speak in ${configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"} for your greeting and explanations, and English only for practice examples. ${configuracion.tema.trim() ? "Start with a brief explanation and example about my chosen learning goal." : "Ask what I would like to learn."} Then wait for me.`
-        : "Begin our conversation now, following the assigned mode and roles. Use a natural short English opening related to the chosen topic or situation, then wait for me.";
-      sesion.sendClientContent({
-        turns: [{ role: "user", parts: [{ text: apertura }] }],
-        turnComplete: true,
-      });
+        ? `Greet me now, out loud, without waiting for me to speak first. Speak in ${configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"} for your greeting and explanations, and English only for practice examples. ${configuracion.tema.trim() ? "Start with a brief explanation and example about my chosen learning goal." : "Ask what I would like to learn."} Then pause and listen.`
+        : "Greet me now, out loud, without waiting for me to speak first. Use a short natural English opening in character for the assigned mode and roles. Then pause and listen.";
+      this.instruir(sesion, apertura);
     } catch (error) {
       this.fallar(r, preparandoAudio ? errorMicrofono(error) : "No pudimos conectar con el tutor. Inténtalo de nuevo en unos momentos.");
     }
