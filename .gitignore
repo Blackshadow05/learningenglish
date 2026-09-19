@@ -21,6 +21,7 @@
 /coverage/
 /test-results/
 /playwright-report/
+/.playwright-mcp/
 
 # Environment files and local secrets
 .env

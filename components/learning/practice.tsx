@@ -1,27 +1,135 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
 import { Icon, type IconName } from "./icons";
 import { useLearning } from "./learning-provider";
+import { useConversacionEnVivo } from "./live-conversation";
 
-const scenarios: { title: string; subtitle: string; icon: IconName; prompt: string; correct: string; wrong: string; reply: string; hint: string }[] = [
-  { title: "Un café, por favor", subtitle: "Vida cotidiana · pedir y conversar", icon: "coffee", prompt: "Hi there! Welcome to Bloom Café. What can I get for you?", correct: "I'd like a coffee, please.", wrong: "I want a coffee yesterday.", reply: "Of course! Would you like it hot or iced?", hint: "Para pedir con amabilidad puedes usar: I'd like… (Me gustaría…)." },
-  { title: "Tu próxima aventura", subtitle: "Viajes · descubrir nuevos lugares", icon: "globe", prompt: "Hello! Where would you like to travel next?", correct: "I'd like to visit London.", wrong: "I would like visit London.", reply: "London is a great choice! What would you like to see there?", hint: "Después de would like, usamos to antes del verbo: I'd like to visit…" },
-  { title: "Conoce a tu equipo", subtitle: "Trabajo · presentarte con confianza", icon: "briefcase", prompt: "Welcome to the team! Could you tell me a little about yourself?", correct: "I'm a designer, and I love learning.", wrong: "I am designer and I loves learning.", reply: "Nice to meet you! What do you enjoy most about your work?", hint: "Recuerda usar a antes de una profesión: I'm a designer. Con I usamos love." },
+const iconosEscenario: Record<string, IconName> = {
+  llegada_huesped: "home",
+  indicaciones_recepcion: "target",
+  estacionamiento_transporte: "arrow",
+};
+
+const modelosVoz = [
+  { nombre: "Gemini 3.8 Live", disponible: true },
+  { nombre: "GPT Live 1", disponible: false },
 ];
-type Message = { role: "ai" | "user" | "feedback"; text: string };
+
 export function Practice() {
   const { provider, setProvider, level, speak } = useLearning();
-  const [scenario, setScenario] = useState(0);
-  const [active, setActive] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [turn, setTurn] = useState(0);
+  const escenarios = useQuery(api.escenarios.listar);
+  const {
+    estado,
+    mensajes,
+    error,
+    micActivo,
+    micError,
+    micSilenciado,
+    tutorHablando,
+    iniciar,
+    finalizar,
+    enviarTexto,
+    alternarMicrofono,
+  } = useConversacionEnVivo();
+  const [escenarioId, setEscenarioId] = useState<string | null>(null);
+  const [panelAbierto, setPanelAbierto] = useState(false);
   const [finished, setFinished] = useState(false);
-  const scene = scenarios[scenario];
-  function start() { setActive(true); setFinished(false); setTurn(0); setMessages([{ role: "ai", text: scene.prompt }]); }
-  function reply(correct: boolean) {
-    const text = correct ? scene.correct : scene.wrong;
-    setMessages(current => [...current, { role: "user", text }, ...(!correct ? [{ role: "feedback" as const, text: `${scene.hint} Prueba: “${scene.correct}”` }] : []), { role: "ai", text: scene.reply }]); setTurn(1);
+  const [texto, setTexto] = useState("");
+  const [modoTexto, setModoTexto] = useState(false);
+  const escenario =
+    escenarios?.find((item) => item.id === escenarioId) ?? escenarios?.[0] ?? null;
+  const enVivo = estado === "en_vivo" || estado === "conectando";
+  const puedeIniciar = escenario !== null && provider === "Gemini 3.8 Live";
+  const ultimoTutor = [...mensajes].reverse().find((mensaje) => mensaje.rol === "tutor");
+
+  function comenzar() {
+    if (!escenario) return;
+    setPanelAbierto(true);
+    setFinished(false);
+    setModoTexto(false);
+    void iniciar(escenario.id, level);
   }
-  return <><section className="page-heading"><div className="eyebrow">AQUÍ PUEDES EQUIVOCARTE</div><h1>Más conversación.<br/>Más confianza<span className="purple-text">.</span></h1><p>Tu espacio para soltar el inglés, sin presión.</p></section><div className="provider-control"><span>Tu compañero de voz</span><div className="provider-switch" aria-label="Modelo de voz">{["GPT Live 1", "Gemini 3.8 Live"].map(model => <button key={model} className={provider === model ? "active" : ""} disabled={active} onClick={() => setProvider(model)} aria-pressed={provider === model}><Icon name="sparkles" size={16}/>{model}</button>)}</div><span className="provider-note">Selector de diseño · APIs todavía sin conectar</span></div>{!active && !finished && <><div className="voice-stage"><div className="voice-orbit"><div className="voice-orb"><Icon name="mic" size={38}/></div><span className="orb-star star-one">✦</span><span className="orb-star star-two">✧</span></div><h2>Tenemos mucho de qué hablar.</h2><p>Elige una situación y prueba una conversación.</p><span className="tag purple-tag">{level ?? "Tu nivel"} · Correcciones con calma</span></div><div className="section-heading"><h2>¿Por dónde empezamos?</h2></div><div className="scenario-list">{scenarios.map((item, index) => <button key={item.title} className={`scenario-option ${scenario === index ? "selected" : ""}`} aria-pressed={scenario === index} onClick={() => setScenario(index)}><span className="feature-icon"><Icon name={item.icon} size={22}/></span><span><strong>{item.title}</strong><small>{item.subtitle}</small></span><span className="radio-dot">{scenario === index && <i/>}</span></button>)}</div><button className="button purple-button full" onClick={start}><Icon name="mic" size={20}/>Probar conversación de ejemplo</button><p className="fine-print">Simulación guiada · no se activa el micrófono</p></>}{active && <section className="conversation-panel"><div className="conversation-header"><span className="live-dot"/><div><strong>{scene.title}</strong><span>{provider} · conversación de ejemplo</span></div><button className="icon-button" aria-label="Terminar conversación" onClick={() => { setActive(false); setFinished(true); window.speechSynthesis?.cancel(); }}><Icon name="close"/></button></div><div className="transcript" aria-live="polite">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span className="message-label">{message.role === "ai" ? "Bloom" : message.role === "user" ? "Tú" : "Un pequeño ajuste"}</span><p lang={message.role === "feedback" ? "es" : "en"}>{message.text}</p>{message.role === "ai" && <button className="text-button" onClick={() => speak(message.text)}><Icon name="volume" size={16}/>Escuchar</button>}</div>)}</div><div className="reply-options"><span className="eyebrow">ELIGE UNA RESPUESTA PARA PROBAR</span>{turn === 0 ? <><button onClick={() => reply(true)}>{scene.correct}<Icon name="send" size={16}/></button><button onClick={() => reply(false)}>{scene.wrong}<Icon name="send" size={16}/></button><button className="hint-button" onClick={() => setMessages(current => [...current, { role: "feedback", text: scene.hint }])}><Icon name="help" size={16}/>Necesito una pista</button></> : <button className="button purple-button full" onClick={() => { setActive(false); setFinished(true); window.speechSynthesis?.cancel(); }}>Terminar práctica<Icon name="check" size={18}/></button>}</div></section>}{finished && <div className="session-summary"><div className="modal-emblem lilac-icon"><Icon name="sparkles" size={30}/></div><h2>Ya diste el primer paso.</h2><p>Así se sentirá practicar: hablar, recibir una corrección y volver a intentarlo.</p><div className="example-box"><span className="eyebrow">UNA FRASE PARA LLEVARTE</span><h3 lang="en">{scene.correct}</h3><button className="text-button" onClick={() => speak(scene.correct)}><Icon name="volume" size={18}/>Escuchar otra vez</button></div><button className="button purple-button full" onClick={() => { setFinished(false); setMessages([]); }}>Probar otra situación<Icon name="arrow" size={18}/></button></div>}<div className="soft-note"><Icon name="book"/><span>Un espacio para aprender inglés: dudas del idioma, speaking, listening y correcciones que te ayudan a avanzar.</span></div></>;
+  function terminar() {
+    finalizar();
+    setPanelAbierto(false);
+    setFinished(true);
+  }
+  function enviar() {
+    const limpio = texto.trim();
+    if (!limpio) return;
+    enviarTexto(limpio);
+    setTexto("");
+  }
+  return <>
+    <section className="page-heading">
+      <div className="eyebrow">AQUÍ PUEDES EQUIVOCARTE</div>
+      <h1>Más conversación.<br/>Más confianza<span className="purple-text">.</span></h1>
+      <p>Tu espacio para soltar el inglés, sin presión.</p>
+    </section>
+    <div className="provider-control">
+      <span>Tu compañero de voz</span>
+      <div className="provider-switch" aria-label="Modelo de voz">
+        {modelosVoz.map(modelo => <button key={modelo.nombre} className={provider === modelo.nombre ? "active" : ""} disabled={enVivo || !modelo.disponible} onClick={() => setProvider(modelo.nombre)} aria-pressed={provider === modelo.nombre}><Icon name="sparkles" size={16}/>{modelo.nombre}</button>)}
+      </div>
+      <span className="provider-note">{provider === "Gemini 3.8 Live" ? "Voz en tiempo real · GPT Live 1 llegará después" : "GPT Live 1 todavía no está conectado"}</span>
+    </div>
+    {!panelAbierto && !finished && <>
+      <div className="voice-stage">
+        <div className="voice-orbit"><div className="voice-orb"><Icon name="mic" size={38}/></div><span className="orb-star star-one">✦</span><span className="orb-star star-two">✦</span></div>
+        <h2>Tenemos mucho de qué hablar.</h2>
+        <p>Elige una situación de hotel y habla con Gemini en tiempo real.</p>
+        <span className="tag purple-tag">{level ?? "Tu nivel"} · Conversación real</span>
+      </div>
+      <div className="section-heading"><h2>¿Por dónde empezamos?</h2></div>
+      <div className="scenario-list">
+        {(escenarios ?? []).map(item => <button key={item.id} className={`scenario-option ${escenario?.id === item.id ? "selected" : ""}`} aria-pressed={escenario?.id === item.id} onClick={() => setEscenarioId(item.id)}><span className="feature-icon"><Icon name={iconosEscenario[item.id] ?? "globe"} size={22}/></span><span><strong>{item.titulo}</strong><small>{item.subtitulo}</small></span><span className="radio-dot">{escenario?.id === item.id && <i/>}</span></button>)}
+        {!escenarios && <p className="loading-message">Preparando escenarios…</p>}
+      </div>
+      <button className="button purple-button full" disabled={!puedeIniciar} onClick={comenzar}><Icon name="mic" size={20}/>Empezar a conversar</button>
+      <p className="fine-print">Voz en tiempo real · necesitarás permitir el micrófono (también puedes escribir)</p>
+    </>}
+    {panelAbierto && <section className="conversation-panel">
+      <div className="conversation-header">
+        <span className="live-dot"/>
+        <div>
+          <strong>{escenario?.titulo ?? "Conversación"}</strong>
+          <span>{estado === "conectando" ? "Conectando con Gemini…" : estado === "en_vivo" ? `${provider} · ${micActivo ? (micSilenciado ? "micrófono en silencio" : "te escucho por voz") : "modo texto"}` : estado === "error" ? "La sesión se detuvo" : "Sesión finalizada"}</span>
+        </div>
+        <button className="icon-button" aria-label="Terminar conversación" onClick={terminar}><Icon name="close"/></button>
+      </div>
+      <div className="transcript" aria-live="polite">
+        {!mensajes.length && <div className="message feedback"><span className="message-label">Bloom</span><p lang="es">{estado === "conectando" ? "Un momento, estoy preparando la sala…" : estado === "error" ? "No pudimos conectar. Revisa la clave de Gemini y vuelve a intentarlo." : micError ? micError : "Empieza a hablar cuando quieras; tu tutor de hotel te responderá por voz."}</p></div>}
+        {micError && mensajes.length > 0 && <div className="message feedback"><span className="message-label">Micrófono</span><p lang="es">{micError}</p></div>}
+        {mensajes.map(mensaje => <div className={`message ${mensaje.rol === "tutor" ? "ai" : "user"}`} key={mensaje.id}><span className="message-label">{mensaje.rol === "tutor" ? "Bloom" : "Tú"}</span><p lang="en">{mensaje.texto}</p>{mensaje.rol === "tutor" && <button className="text-button" onClick={() => speak(mensaje.texto)}><Icon name="volume" size={16}/>Escuchar texto</button>}</div>)}
+        {tutorHablando && <div className="message ai"><span className="message-label">Bloom</span><p className="muted">Hablando…</p></div>}
+        {error && <div className="message feedback" role="alert"><span className="message-label">Aviso</span><p lang="es">{error}</p></div>}
+      </div>
+      {micActivo && !modoTexto ? <div className="reply-options">
+        <p className="eyebrow" role="status">{estado === "en_vivo" ? (micSilenciado ? "MICRÓFONO EN SILENCIO" : "TE ESCUCHO · HABLA CUANDO QUIERAS") : "PREPARANDO EL MICRÓFONO"}</p>
+        <button className="button purple-button full" type="button" onClick={alternarMicrofono} disabled={estado !== "en_vivo"}>{micSilenciado ? <><Icon name="mic" size={18}/>Activar micrófono</> : <><Icon name="pause" size={18}/>Silenciar micrófono</>}</button>
+        <p className="fine-print">Habla con naturalidad y espera la respuesta en voz alta; puedes interrumpir al tutor hablando.</p>
+        <button className="text-button skip" type="button" onClick={() => setModoTexto(true)}>Prefiero escribir en su lugar</button>
+        <button className="button secondary full" type="button" onClick={terminar}>Terminar práctica<Icon name="check" size={18}/></button>
+      </div> : <form className="reply-options" onSubmit={evento => { evento.preventDefault(); enviar(); }}>
+        <label className="search-field">
+          <Icon name="send" size={18}/>
+          <input value={texto} onChange={evento => setTexto(evento.target.value)} placeholder="Escribe en inglés para el tutor" aria-label="Mensaje para el tutor" disabled={estado !== "en_vivo"}/>
+        </label>
+        <button className="button purple-button full" type="submit" disabled={estado !== "en_vivo" || !texto.trim()}>Enviar mensaje<Icon name="send" size={18}/></button>
+        {micActivo && <button className="text-button skip" type="button" onClick={() => setModoTexto(false)}>Volver a hablar por voz</button>}
+        <button className="button secondary full" type="button" onClick={terminar}>Terminar práctica<Icon name="check" size={18}/></button>
+      </form>}
+    </section>}
+    {finished && <div className="session-summary">
+      <div className="modal-emblem lilac-icon"><Icon name="sparkles" size={30}/></div>
+      <h2>Ya diste el primer paso.</h2>
+      <p>Así se siente practicar: hablar, recibir una corrección natural y volver a intentarlo.</p>
+      {ultimoTutor && <div className="example-box"><span className="eyebrow">UNA FRASE PARA LLEVARTE</span><h3 lang="en">{ultimoTutor.texto}</h3><button className="text-button" onClick={() => speak(ultimoTutor.texto)}><Icon name="volume" size={18}/>Escuchar otra vez</button></div>}
+      <button className="button purple-button full" onClick={() => setFinished(false)}>Probar otra situación<Icon name="arrow" size={18}/></button>
+    </div>}
+    <div className="soft-note"><Icon name="book"/><span>Conversación con Gemini 3.8 Live: dudas del idioma, speaking, listening y correcciones que te ayudan a avanzar.</span></div>
+  </>;
 }

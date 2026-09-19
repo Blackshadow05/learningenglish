@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { ConvexClientProvider } from "@/components/convex-provider";
 
 export const metadata: Metadata = {
   title: {
@@ -28,7 +29,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="es">
-      <body>{children}</body>
+      <body><ConvexClientProvider>{children}</ConvexClientProvider></body>
     </html>
   );
 }
