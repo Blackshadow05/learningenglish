@@ -18,6 +18,7 @@
 /.cache/
 
 # Tests and reports
+/tests/
 /coverage/
 /test-results/
 /playwright-report/

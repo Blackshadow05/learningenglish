@@ -8,7 +8,6 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:voice": "node --test tests/live-session.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
