@@ -6,13 +6,17 @@ import { Icon } from "./icons";
 import styles from "./practice.module.css";
 
 const CLAVE = "bloom.voice.preferences.v1";
+const CLAVE_PROVEEDOR = "bloom.voice.provider.v1";
+export type ProveedorVoz = "gemini" | "openai";
 export function usePreferenciasVoz() {
   const [configuracion, setConfiguracion] = useState<ConfiguracionPractica>(CONFIGURACION_INICIAL);
+  const [proveedor, setProveedor] = useState<ProveedorVoz>("gemini");
   useEffect(() => {
     let activa = true;
     queueMicrotask(() => {
       if (!activa) return;
       try { setConfiguracion(leerPreferencias(JSON.parse(localStorage.getItem(CLAVE) ?? "null"))); } catch { /* Optional device storage. */ }
+      try { const guardado = localStorage.getItem(CLAVE_PROVEEDOR); if (guardado === "openai" || guardado === "gemini") setProveedor(guardado); } catch { /* Optional device storage. */ }
     });
     return () => { activa = false; };
   }, []);
@@ -21,11 +25,16 @@ export function usePreferenciasVoz() {
     setConfiguracion(siguiente);
     try { localStorage.setItem(CLAVE, JSON.stringify({ ...siguiente, tema: "" })); } catch { /* Private mode or storage quota. */ }
   }
-  return { configuracion, cambiar };
+  function cambiarProveedor(siguiente: ProveedorVoz) {
+    setProveedor(siguiente);
+    try { localStorage.setItem(CLAVE_PROVEEDOR, siguiente); } catch { /* Private mode or storage quota. */ }
+  }
+  return { configuracion, cambiar, proveedor, cambiarProveedor };
 }
 
-export function PracticeSettings({ configuracion: c, cambiar, escenarios, escenarioId, elegirEscenario }: {
+export function PracticeSettings({ configuracion: c, cambiar, proveedor, cambiarProveedor, escenarios, escenarioId, elegirEscenario }: {
   configuracion: ConfiguracionPractica; cambiar: (c: Partial<ConfiguracionPractica>) => void;
+  proveedor: ProveedorVoz; cambiarProveedor: (p: ProveedorVoz) => void;
   escenarios: { id: string; titulo: string }[] | undefined; escenarioId: string; elegirEscenario: (id: string) => void;
 }) {
   return <div className={styles.setup}>
@@ -33,6 +42,14 @@ export function PracticeSettings({ configuracion: c, cambiar, escenarios, escena
       {MODOS_PRACTICA.map(m => <button key={m.id} className={styles.modeCard} aria-pressed={c.modo === m.id} onClick={() => cambiar({ modo: m.id, tema: "", correcciones: m.id === "profesor" ? "durante" : "al_final" })}>
         <Icon name={m.icono} size={21}/><strong>{m.titulo}</strong><span>{m.descripcion}</span>
       </button>)}
+    </div>
+    <div className={styles.scenario}>
+      <p className={styles.fieldLabel}>VOZ DEL TUTOR</p>
+      <div className={styles.roles} role="group" aria-label="Modelo de voz del tutor">
+        <button aria-pressed={proveedor === "gemini"} onClick={() => cambiarProveedor("gemini")}>Gemini 3.8 Live</button>
+        <button aria-pressed={proveedor === "openai"} onClick={() => cambiarProveedor("openai")}>GPT Live 1</button>
+      </div>
+      <p className={styles.roleHint}>{proveedor === "gemini" ? "Voz de Google en tiempo real." : "Voz de OpenAI en tiempo real."}</p>
     </div>
     {c.modo === "simulacion" && <div className={styles.scenario}>
       <p className={styles.fieldLabel}>TU PAPEL</p>

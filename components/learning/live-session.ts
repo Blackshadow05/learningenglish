@@ -6,9 +6,10 @@ export type EstadoConversacion = "inactivo" | "conectando" | "en_vivo" | "finali
 export type MensajeConversacion = { id: number; rol: "estudiante" | "tutor"; texto: string };
 type Nivel = "sin_evaluar" | "A1" | "A2" | "B1" | "B2" | "C1" | "C2";
 type DatosSesion = { token: string; modelo: string; instruccion: string; voz: string };
+type RecursosTransporte = { flujo: MediaStream | null; salida: (flujoRemoto: MediaStream) => void };
 type Dependencias = {
   crearToken: (args: { escenarioId: string; nivel: Nivel | null; configuracion: ConfiguracionPractica }) => Promise<DatosSesion>;
-  conectar: (datos: DatosSesion, callbacks: LiveCallbacks, configuracion: ConfiguracionPractica) => Promise<Session>;
+  conectar: (datos: DatosSesion, callbacks: LiveCallbacks, configuracion: ConfiguracionPractica, transporte?: RecursosTransporte) => Promise<Session>;
 };
 type Snapshot = {
   estado: EstadoConversacion;
@@ -283,6 +284,13 @@ export class ConversacionLive {
 
   private recibir(r: Recursos, mensaje: LiveServerMessage) {
     if (this.actual !== r) return;
+    const remoto = (mensaje as LiveServerMessage & { vozRemota?: { hablando: boolean } }).vozRemota;
+    if (remoto) {
+      if (!r.cerrando) {
+        this.actualizar(remoto.hablando ? { tutorHablando: true, esperandoRespuesta: false } : { tutorHablando: false });
+      }
+      return;
+    }
     for (const llamada of mensaje.toolCall?.functionCalls ?? []) {
       let respuesta: Record<string, unknown> = { error: "Unsupported request" };
       if (llamada.name === "entregar_resumen" && r.cerrando) {
@@ -437,7 +445,14 @@ export class ConversacionLive {
         },
         onerror: () => this.fallar(r, "No pudimos mantener la conexión de voz. Inténtalo de nuevo."),
         onclose: () => this.fallar(r, "La conexión de voz terminó. Puedes iniciar una nueva conversación."),
-      }, configuracion);
+      }, configuracion, {
+        flujo: r.flujo,
+        salida: (flujoRemoto) => {
+          if (this.actual !== r || !r.reproduccion || !r.analizador) return;
+          const fuente = r.reproduccion.createMediaStreamSource(flujoRemoto);
+          fuente.connect(r.analizador);
+        },
+      });
       if (this.actual !== r) { sesion.close(); return; }
       r.sesion = sesion;
       clearTimeout(r.timeout);

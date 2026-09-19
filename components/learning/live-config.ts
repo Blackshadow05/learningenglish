@@ -1,10 +1,11 @@
 import { ActivityHandling, EndSensitivity, Modality, StartSensitivity, type LiveConnectConfig } from "@google/genai";
 import type { ConfiguracionPractica } from "../../lib/practice-config";
+import { DESCRIPCION_ACTUALIZAR_CONTEXTO, DESCRIPCION_ENTREGAR_RESUMEN, ESQUEMA_ACTUALIZAR_CONTEXTO, ESQUEMA_ENTREGAR_RESUMEN, INSTRUCCION_HERRAMIENTAS } from "../../lib/practice-tools";
 
 export function configuracionLive(instruccion: string, voz: string, preferencias: ConfiguracionPractica): LiveConnectConfig {
   return {
     responseModalities: [Modality.AUDIO], inputAudioTranscription: {}, outputAudioTranscription: {},
-    systemInstruction: { parts: [{ text: instruccion + "\nWhen the learner requests a temporary teacher explanation, resuming the scene, or swapping roles, call actualizar_contexto with the resulting state. Never change roles spontaneously. Call entregar_resumen ONLY when the application explicitly requests the final review. These tools do not replace your normal spoken replies." }] },
+    systemInstruction: { parts: [{ text: instruccion + "\n" + INSTRUCCION_HERRAMIENTAS }] },
     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voz } } },
     realtimeInputConfig: {
       activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
@@ -15,16 +16,8 @@ export function configuracionLive(instruccion: string, voz: string, preferencias
       },
     },
     tools: [{ functionDeclarations: [
-      { name: "actualizar_contexto", description: "Reflect a learner-requested pause for teaching, resumption, or role swap. papelEstudiante is the LEARNER's role; the assistant plays the opposite role.", parametersJsonSchema: {
-        type: "object", properties: { ayudaActiva: { type: "boolean" }, papelEstudiante: { type: "string", enum: ["huesped", "colaborador"] } }, required: ["ayudaActiva", "papelEstudiante"],
-      } },
-      { name: "entregar_resumen", description: "Submit the final review only after the application asks. Quote only actual learner transcript words verbatim as evidence. At most two useful corrections; an empty array is valid. No invented errors, scores or pronunciation judgments.", parametersJsonSchema: {
-        type: "object", properties: {
-          logro: { type: "object", properties: { detalle: { type: "string" }, evidencia: { type: "string" } }, required: ["detalle", "evidencia"] },
-          correcciones: { type: "array", maxItems: 2, items: { type: "object", properties: { original: { type: "string" }, mejora: { type: "string" }, explicacion: { type: "string" } }, required: ["original", "mejora", "explicacion"] } },
-          frase: { type: "string" },
-        }, required: ["logro", "correcciones", "frase"],
-      } },
+      { name: "actualizar_contexto", description: DESCRIPCION_ACTUALIZAR_CONTEXTO, parametersJsonSchema: ESQUEMA_ACTUALIZAR_CONTEXTO },
+      { name: "entregar_resumen", description: DESCRIPCION_ENTREGAR_RESUMEN, parametersJsonSchema: ESQUEMA_ENTREGAR_RESUMEN },
     ] }],
   };
 }
