@@ -8,7 +8,7 @@ import { DESCRIPCION_GUARDAR_PROGRESO, ESQUEMA_GUARDAR_PROGRESO } from "../lib/p
 
 // gpt-realtime-2.1-mini connects straight to the Realtime API over WebRTC.
 // Function calling is handled here in Convex — no extra LLM in the loop.
-const URL_SESIONES_REALTIME = "https://api.openai.com/v1/realtime/sessions";
+const URL_SECRETOS_REALTIME = "https://api.openai.com/v1/realtime/client_secrets";
 const MAX_PROGRESO_GUARDADO = 8;
 const LIMITE_ELEMENTOS_PROGRESO = 10;
 
@@ -63,34 +63,39 @@ export const prepararSesionMini = action({
     if (progresoPrevio) {
       instruccion += `\nLearner memory from previous sessions: ${progresoPrevio}. Naturally reuse the phrases to practice during the conversation; do not quiz the learner about this list.`;
     }
-    const respuesta = await fetch(URL_SESIONES_REALTIME, {
+    const respuesta = await fetch(URL_SECRETOS_REALTIME, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: modelo,
-        modalities: ["audio", "text"],
-        instructions: instruccion,
-        voice: voz,
-        input_audio_transcription: { model: "whisper-1" },
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 250,
-          silence_duration_ms: 800,
-          create_response: true,
-          interrupt_response: true,
+        session: {
+          type: "realtime",
+          model: modelo,
+          instructions: instruccion,
+          audio: {
+            input: {
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 250,
+                silence_duration_ms: 800,
+                create_response: true,
+                interrupt_response: true,
+              },
+              transcription: { model: "whisper-1" },
+            },
+            output: { voice: voz },
+          },
+          tools: [{ type: "function", name: "guardar_progreso", description: DESCRIPCION_GUARDAR_PROGRESO, parameters: ESQUEMA_GUARDAR_PROGRESO }],
+          tool_choice: "auto",
         },
-        max_response_output_tokens: 256,
-        tools: [{ type: "function", name: "guardar_progreso", description: DESCRIPCION_GUARDAR_PROGRESO, parameters: ESQUEMA_GUARDAR_PROGRESO }],
-        tool_choice: "auto",
       }),
     });
     if (!respuesta.ok) {
       const detalle = await respuesta.text();
       throw new Error(`OpenAI rechazó la sesión Realtime Mini (${respuesta.status}): ${detalle.slice(0, 300)}`);
     }
-    const datos = (await respuesta.json()) as { client_secret?: { value?: unknown } };
-    const token = typeof datos.client_secret?.value === "string" ? datos.client_secret.value : "";
+    const datos = (await respuesta.json()) as { value?: unknown; client_secret?: { value?: unknown } };
+    const token = typeof datos.value === "string" ? datos.value : (typeof datos.client_secret?.value === "string" ? datos.client_secret.value : "");
     if (!token) {
       throw new Error("OpenAI no devolvió el token efímero de la sesión Realtime Mini.");
     }
