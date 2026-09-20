@@ -7,7 +7,7 @@ import { Icon } from "./icons";
 import { useLearning } from "./learning-provider";
 import { useConversacionEnVivo } from "./live-conversation";
 import { useConversacionOpenAI } from "./live-conversation-openai";
-import { useConversacionMini } from "./live-conversation-mini";
+import RealtimeEnglishTutor from "./realtime-tutor";
 import type { MensajeConversacion } from "./live-session";
 import { NOMBRES_MODO } from "../../lib/practice-config";
 import { PracticeSettings, usePreferenciasVoz, type ProveedorVoz } from "./practice-settings";
@@ -177,9 +177,8 @@ export function Practice() {
   const escenarios = useQuery(api.escenarios.listar);
   const gemini = useConversacionEnVivo();
   const openai = useConversacionOpenAI();
-  const mini = useConversacionMini();
   const { configuracion, cambiar, proveedor, cambiarProveedor } = usePreferenciasVoz();
-  const conversacion = proveedor === "mini" ? mini : proveedor === "openai" ? openai : gemini;
+  const conversacion = proveedor === "openai" ? openai : gemini;
   const [escenarioId, setEscenarioId] = useState("");
   const [salaAbierta, setSalaAbierta] = useState(false);
   const [resumen, setResumen] = useState<{ duracion: number; turnos: number } | null>(null);
@@ -188,6 +187,20 @@ export function Practice() {
   const escenario = escenarios?.find(item => item.id === idSeleccionado);
   const listo = configuracion.modo !== "simulacion" || (idSeleccionado === "personalizado" ? !!configuracion.tema.trim() : !!escenario);
   const titulo = configuracion.modo === "simulacion" ? escenario?.titulo ?? "Tu situación" : NOMBRES_MODO[configuracion.modo];
+
+  // Realtime Mini usa un flujo mínimo y directo: solo WebRTC del navegador
+  // con el token efímero de /api/realtime-token. Sin Convex ni ConversacionLive.
+  if (proveedor === "mini") {
+    return <div className={styles.practice}>
+      <section className={styles.heading}>
+        <p className={styles.eyebrow}>CONVERSA CON BLOOM</p>
+        <h1>Hoy, a <em>tu manera.</em></h1>
+        <p>Realtime Mini: voz directa, ligera y económica.</p>
+      </section>
+      <PracticeSettings configuracion={configuracion} cambiar={cambiar} proveedor={proveedor} cambiarProveedor={cambiarProveedor} escenarios={escenarios} escenarioId={idSeleccionado} elegirEscenario={setEscenarioId}/>
+      <RealtimeEnglishTutor/>
+    </div>;
+  }
 
   function comenzar() {
     if (!listo) return;
