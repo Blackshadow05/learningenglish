@@ -19,6 +19,7 @@ export function useConversacionMini(): Conversacion {
       },
       conectar: (datos, callbacks, _preferencias, transporte) =>
         conectarRealtimeMini(datos, callbacks, transporte, (args) => ejecutarHerramienta({ ...args, nivel: nivelActual })),
+      transcripcion: { estudiante: false, tutor: true },
     });
   });
   const snapshot = useSyncExternalStore(conversacion.subscribe, conversacion.getSnapshot, conversacion.getSnapshot);

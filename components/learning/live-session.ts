@@ -10,11 +10,15 @@ type RecursosTransporte = { flujo: MediaStream | null; salida: (flujoRemoto: Med
 type Dependencias = {
   crearToken: (args: { escenarioId: string; nivel: Nivel | null; configuracion: ConfiguracionPractica }) => Promise<DatosSesion>;
   conectar: (datos: DatosSesion, callbacks: LiveCallbacks, configuracion: ConfiguracionPractica, transporte?: RecursosTransporte) => Promise<Session>;
+  transcripcion?: Record<MensajeConversacion["rol"], boolean>;
 };
 type SesionExtendida = Session & {
   agregarInstruccion?: (texto: string) => void;
   agregarMensajeUsuario?: (texto: string) => void;
+  silenciarEntrada?: (silenciado: boolean) => void;
+  solicitarResumen?: (texto: string) => void;
 };
+type MensajeExtra = LiveServerMessage & { vozRemota?: { hablando: boolean }; turnoEstudiante?: boolean; apoyo?: boolean };
 type Snapshot = {
   estado: EstadoConversacion;
   mensajes: MensajeConversacion[];
@@ -31,6 +35,8 @@ type Snapshot = {
   pulsando: boolean;
   resumen: ResumenPractica | null;
   estadoResumen: "inactivo" | "preparando" | "listo" | "no_disponible";
+  turnos: number;
+  apoyoActivo: boolean;
 };
 type Recursos = {
   sesion: Session | null;
@@ -49,13 +55,17 @@ type Recursos = {
   soltando: boolean;
   cierrePulsacion?: ReturnType<typeof setTimeout>;
   cerrando: boolean;
+  audioRemoto: HTMLAudioElement | null;
+  remotoHablando: boolean;
+  remotoSonando: boolean;
+  ultimaSalida: number;
 };
 
 const INICIAL: Snapshot = {
   estado: "inactivo", mensajes: [], error: "", micSilenciado: false,
   tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false, inicio: null, fin: null,
   configuracion: CONFIGURACION_INICIAL, papelActual: "colaborador", ayudaActiva: false, pulsando: false,
-  resumen: null, estadoResumen: "inactivo",
+  resumen: null, estadoResumen: "inactivo", turnos: 0, apoyoActivo: false,
 };
 
 // About 64ms per packet at 16kHz; output stays silent to avoid microphone feedback.
@@ -146,6 +156,25 @@ export class ConversacionLive {
     sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: texto }] }], turnComplete: true });
   }
 
+  private pedirResumen(sesion: Session, texto: string) {
+    const extendida = sesion as SesionExtendida;
+    if (extendida.solicitarResumen) extendida.solicitarResumen(texto);
+    else this.enviarAlBackend(sesion, texto);
+  }
+
+  private transcribe(rol: MensajeConversacion["rol"]) {
+    return this.dependencias.transcripcion?.[rol] ?? true;
+  }
+
+  private vozRemota(r: Recursos, cambios: { hablando?: boolean; sonando?: boolean }) {
+    if (cambios.hablando !== undefined) r.remotoHablando = cambios.hablando;
+    if (cambios.sonando !== undefined) r.remotoSonando = cambios.sonando;
+    if (r.cerrando) return;
+    const hablando = r.remotoHablando || r.remotoSonando;
+    if (hablando === this.snapshot.tutorHablando) return;
+    this.actualizar(hablando ? { tutorHablando: true, esperandoRespuesta: false } : { tutorHablando: false });
+  }
+
   private pararReproduccion(r: Recursos) {
     for (const fuente of r.fuentes) {
       fuente.onended = null;
@@ -172,6 +201,10 @@ export class ConversacionLive {
       r.captura.port.close();
     }
     r.flujo?.getTracks().forEach((pista) => { pista.onended = null; pista.stop(); });
+    if (r.audioRemoto) {
+      r.audioRemoto.pause();
+      r.audioRemoto.srcObject = null;
+    }
     r.analizador?.disconnect();
     if (r.contexto && r.contexto.state !== "closed") void r.contexto.close().catch(() => {});
     if (r.reproduccion && r.reproduccion.state !== "closed") void r.reproduccion.close().catch(() => {});
@@ -183,30 +216,34 @@ export class ConversacionLive {
     if (this.actual !== r) return;
     if (r.cerrando) { this.finalizar(); this.actualizar({ estadoResumen: "no_disponible" }); return; }
     this.liberar();
-    this.actualizar({ estado: "error", error, fin: Date.now(), tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false });
+    this.actualizar({ estado: "error", error, fin: Date.now(), tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false, apoyoActivo: false });
   }
 
   finalizar = () => {
     this.liberar();
-    this.actualizar({ estado: "finalizada", fin: this.snapshot.fin ?? Date.now(), tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false, pulsando: false });
+    this.actualizar({ estado: "finalizada", fin: this.snapshot.fin ?? Date.now(), tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false, pulsando: false, apoyoActivo: false });
   };
 
   cerrarConResumen = (solicitado = false) => {
     const r = this.actual;
     if (r?.cerrando) return;
     const intervenciones = this.snapshot.mensajes.filter(m => m.rol === "estudiante");
-    if (!r?.sesion || this.snapshot.estado !== "en_vivo" || !intervenciones.length || (this.snapshot.configuracion.correcciones === "a_peticion" && !solicitado)) { this.finalizar(); return; }
+    if (!r?.sesion || this.snapshot.estado !== "en_vivo" || !this.snapshot.turnos || (this.snapshot.configuracion.correcciones === "a_peticion" && !solicitado)) { this.finalizar(); return; }
     r.cerrando = true;
     clearTimeout(r.cierrePulsacion);
     this.pararReproduccion(r);
+    if (r.audioRemoto) r.audioRemoto.muted = true;
     r.flujo?.getTracks().forEach(p => { p.onended = null; p.stop(); });
     this.niveles.entrada = 0;
-    this.actualizar({ estado: "finalizada", fin: Date.now(), micSilenciado: true, pulsando: false, estudianteHablando: false, tutorHablando: false, esperandoRespuesta: false, estadoResumen: "preparando" });
+    this.actualizar({ estado: "finalizada", fin: Date.now(), micSilenciado: true, pulsando: false, estudianteHablando: false, tutorHablando: false, esperandoRespuesta: false, apoyoActivo: false, estadoResumen: "preparando" });
     r.timeout = setTimeout(() => { if (this.actual === r) { this.finalizar(); this.actualizar({ estadoResumen: "no_disponible" }); } }, 15000);
+    const evidencia = this.transcribe("estudiante")
+      ? `Use ONLY these learner transcripts as evidence: ${JSON.stringify(intervenciones.map(m => m.texto))}`
+      : "Use ONLY the learner's own words from this conversation as evidence, quoted exactly as they said them.";
     try {
       if (this.snapshot.configuracion.escucha !== "pulsar") r.sesion.sendRealtimeInput({ audioStreamEnd: true });
       else if (r.pulsacion) r.sesion.sendRealtimeInput({ activityEnd: {} });
-      this.enviarAlBackend(r.sesion, `The application has ended the practice. Do not speak. First call guardar_progreso if that tool is available (quote only verbatim learner words; empty arrays are valid). Then call entregar_resumen now if it is available. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. Use ONLY these learner transcripts as evidence: ${JSON.stringify(intervenciones.map(m => m.texto))}`);
+      this.pedirResumen(r.sesion, `The application has ended the practice. Do not speak. First call guardar_progreso if that tool is available (quote only verbatim learner words; empty arrays are valid). Then call entregar_resumen now if it is available. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. ${evidencia}`);
     } catch { this.fallar(r, ""); }
   };
 
@@ -263,16 +300,19 @@ export class ConversacionLive {
     }
   };
 
-  private transcribir(r: Recursos, rol: MensajeConversacion["rol"], texto?: string, final = false) {
+  private transcribir(r: Recursos, rol: MensajeConversacion["rol"], texto?: string, final = false, visible = this.transcribe(rol)) {
     if (texto) {
       const id = r.transcripciones[rol];
-      const anterior = this.snapshot.mensajes.find((mensaje) => mensaje.id === id);
+      const anterior = id === undefined ? undefined : this.snapshot.mensajes.find((mensaje) => mensaje.id === id);
       if (anterior) {
         this.actualizar({ mensajes: this.snapshot.mensajes.map((mensaje) => mensaje.id === id ? { ...mensaje, texto: mensaje.texto + texto } : mensaje) });
-      } else {
+      } else if (id === undefined) {
         const nuevo = { id: ++this.siguienteId, rol, texto };
         r.transcripciones[rol] = nuevo.id;
-        this.actualizar({ mensajes: [...this.snapshot.mensajes, nuevo] });
+        this.actualizar({
+          ...(visible ? { mensajes: [...this.snapshot.mensajes, nuevo] } : {}),
+          ...(rol === "estudiante" ? { turnos: this.snapshot.turnos + 1 } : {}),
+        });
       }
     }
     if (final) delete r.transcripciones[rol];
@@ -306,17 +346,23 @@ export class ConversacionLive {
 
   private recibir(r: Recursos, mensaje: LiveServerMessage) {
     if (this.actual !== r) return;
-    const remoto = (mensaje as LiveServerMessage & { vozRemota?: { hablando: boolean } }).vozRemota;
-    if (remoto) {
-      if (!r.cerrando) {
-        this.actualizar(remoto.hablando ? { tutorHablando: true, esperandoRespuesta: false } : { tutorHablando: false });
-      }
+    const extra = mensaje as MensajeExtra;
+    if (extra.vozRemota) {
+      this.vozRemota(r, { hablando: extra.vozRemota.hablando });
+      return;
+    }
+    if (extra.turnoEstudiante) {
+      if (!r.cerrando) this.actualizar({ turnos: this.snapshot.turnos + 1 });
+      return;
+    }
+    if (typeof extra.apoyo === "boolean") {
+      if (!r.cerrando) this.actualizar(extra.apoyo ? { apoyoActivo: true, esperandoRespuesta: !this.snapshot.tutorHablando } : { apoyoActivo: false });
       return;
     }
     for (const llamada of mensaje.toolCall?.functionCalls ?? []) {
       let respuesta: Record<string, unknown> = { error: "Unsupported request" };
       if (llamada.name === "entregar_resumen" && r.cerrando) {
-        const resumen = validarResumen(llamada.args, this.snapshot.mensajes.filter(m => m.rol === "estudiante").map(m => m.texto));
+        const resumen = validarResumen(llamada.args, this.transcribe("estudiante") ? this.snapshot.mensajes.filter(m => m.rol === "estudiante").map(m => m.texto) : null);
         if (resumen) {
           r.sesion?.sendToolResponse({ functionResponses: [{ id: llamada.id, name: llamada.name, response: { ok: true } }] });
           this.finalizar(); this.actualizar({ resumen, estadoResumen: "listo" }); return;
@@ -382,7 +428,9 @@ export class ConversacionLive {
     r.ultimaVoz = -Infinity;
     this.actualizar({ micSilenciado: silenciado, estudianteHablando: false });
     try {
-      if (silenciado) r.sesion.sendRealtimeInput({ audioStreamEnd: true });
+      const extendida = r.sesion as SesionExtendida;
+      if (extendida.silenciarEntrada) extendida.silenciarEntrada(silenciado);
+      else if (silenciado) r.sesion.sendRealtimeInput({ audioStreamEnd: true });
     } catch {
       this.fallar(r, "Se perdió la conexión. Vuelve a conectar para seguir conversando.");
     }
@@ -396,7 +444,7 @@ export class ConversacionLive {
     r.transcripciones = {};
     try {
       this.enviarAlBackend(r.sesion, limpio);
-      this.transcribir(r, "estudiante", limpio, true);
+      this.transcribir(r, "estudiante", limpio, true, true);
       this.actualizar({ esperandoRespuesta: true, tutorHablando: false });
       return true;
     } catch {
@@ -410,6 +458,7 @@ export class ConversacionLive {
     const r: Recursos = {
       sesion: null, contexto: null, reproduccion: null, flujo: null, captura: null, analizador: null,
       fuentes: new Set(), proximoInicio: 0, ultimaVoz: -Infinity, transcripciones: {}, pulsacion: false, soltando: false, cerrando: false,
+      audioRemoto: null, remotoHablando: false, remotoSonando: false, ultimaSalida: -Infinity,
     };
     this.actual = r;
     this.actualizar({ ...INICIAL, mensajes: [], estado: "conectando", configuracion: { ...configuracion }, papelActual: configuracion.papel, micSilenciado: configuracion.escucha === "pulsar" });
@@ -455,6 +504,10 @@ export class ConversacionLive {
       r.medidor = setInterval(() => {
         r.analizador!.getFloatTimeDomainData(muestrasSalida);
         this.niveles.salida = Math.min(1, Math.sqrt(muestrasSalida.reduce((suma, valor) => suma + valor * valor, 0) / muestrasSalida.length) * 6);
+        if (!r.audioRemoto || this.actual !== r) return;
+        if (this.niveles.salida > 0.05) r.ultimaSalida = performance.now();
+        const sonando = performance.now() - r.ultimaSalida < 600;
+        if (sonando !== r.remotoSonando) this.vozRemota(r, { sonando });
       }, 50);
       preparandoAudio = false;
       const nivelValido = ["sin_evaluar", "A1", "A2", "B1", "B2", "C1", "C2"].includes(nivel ?? "") ? nivel as Nivel : null;
@@ -471,12 +524,22 @@ export class ConversacionLive {
         flujo: r.flujo,
         salida: (flujoRemoto) => {
           if (this.actual !== r || !r.reproduccion || !r.analizador) return;
-          const fuente = r.reproduccion.createMediaStreamSource(flujoRemoto);
-          fuente.connect(r.analizador);
+          const reproduccion = r.reproduccion;
+          const analizador = r.analizador;
+          const audio = new Audio();
+          audio.autoplay = true;
+          audio.srcObject = flujoRemoto;
+          r.audioRemoto = audio;
+          analizador.disconnect();
+          reproduccion.createMediaStreamSource(flujoRemoto).connect(analizador);
+          void audio.play().catch(() => {
+            if (this.actual === r && r.audioRemoto === audio) analizador.connect(reproduccion.destination);
+          });
         },
       });
       if (this.actual !== r) { sesion.close(); return; }
       r.sesion = sesion;
+      if (configuracion.escucha === "pulsar") (sesion as SesionExtendida).silenciarEntrada?.(true);
       clearTimeout(r.timeout);
       // Sessions are designed for 10-15 minutes; end them automatically with a summary.
       r.timeout = setTimeout(() => { if (this.actual === r) this.cerrarConResumen(); }, MINUTOS_SESION_VOZ * 60 * 1000);

@@ -8,11 +8,15 @@ import styles from "./practice.module.css";
 const CLAVE = "bloom.voice.preferences.v1";
 const CLAVE_PROVEEDOR = "bloom.voice.provider.v1";
 export type ProveedorVoz = "gemini" | "openai" | "mini";
-const PROVEEDORES: { id: ProveedorVoz; nombre: string; pista: string }[] = [
-  { id: "gemini", nombre: "Gemini 3.8 Live", pista: "Voz de Google en tiempo real." },
-  { id: "openai", nombre: "GPT Live 1", pista: "Voz de OpenAI en tiempo real." },
-  { id: "mini", nombre: "Realtime Mini", pista: "Voz ligera de OpenAI, la más económica." },
+export type CapacidadesVoz = { subtitulos: "completos" | "tutor" | null; escritura: boolean; apoyo: string | null };
+export const PROVEEDORES: { id: ProveedorVoz; nombre: string; pista: string; capacidades: CapacidadesVoz }[] = [
+  { id: "gemini", nombre: "Gemini 3.8 Live", pista: "Voz de Google en tiempo real, con transcripción completa.", capacidades: { subtitulos: "completos", escritura: true, apoyo: null } },
+  { id: "openai", nombre: "GPT Live 1", pista: "Solo voz, sin transcripción. Se apoya en GPT-6 Luna cuando necesita explicarte algo a fondo.", capacidades: { subtitulos: null, escritura: false, apoyo: "GPT-6 Luna" } },
+  { id: "mini", nombre: "Realtime Mini", pista: "Voz ligera y económica de OpenAI, con subtítulos de Bloom.", capacidades: { subtitulos: "tutor", escritura: true, apoyo: null } },
 ];
+export function datosProveedor(id: ProveedorVoz) {
+  return PROVEEDORES.find(p => p.id === id) ?? PROVEEDORES[0];
+}
 export function usePreferenciasVoz() {
   const [configuracion, setConfiguracion] = useState<ConfiguracionPractica>(CONFIGURACION_INICIAL);
   const [proveedor, setProveedor] = useState<ProveedorVoz>("gemini");
@@ -53,7 +57,7 @@ export function PracticeSettings({ configuracion: c, cambiar, proveedor, cambiar
       <div className={styles.roles} role="group" aria-label="Modelo de voz del tutor">
         {PROVEEDORES.map(p => <button key={p.id} aria-pressed={proveedor === p.id} onClick={() => cambiarProveedor(p.id)}>{p.nombre}</button>)}
       </div>
-      <p className={styles.roleHint}>{PROVEEDORES.find(p => p.id === proveedor)?.pista}</p>
+      <p className={styles.roleHint}>{datosProveedor(proveedor).pista}</p>
     </div>
     {c.modo === "simulacion" && <div className={styles.scenario}>
       <p className={styles.fieldLabel}>TU PAPEL</p>

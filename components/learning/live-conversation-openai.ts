@@ -13,6 +13,7 @@ export function useConversacionOpenAI(): Conversacion {
   const [conversacion] = useState(() => new ConversacionLive({
     crearToken: (args) => prepararSesion(args),
     conectar: (datos, callbacks, _preferencias, transporte) => conectarGptLive(datos, callbacks, transporte, (args) => crearSesionWebrtc(args)),
+    transcripcion: { estudiante: false, tutor: false },
   }));
   const snapshot = useSyncExternalStore(conversacion.subscribe, conversacion.getSnapshot, conversacion.getSnapshot);
 

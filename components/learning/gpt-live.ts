@@ -20,12 +20,14 @@ type SesionAdaptada = {
   sendToolResponse: (params: LiveSendToolResponseParameters) => void;
   agregarInstruccion: (texto: string) => void;
   agregarMensajeUsuario: (texto: string) => void;
+  silenciarEntrada: (silenciado: boolean) => void;
   close: () => void;
 };
 
 const LIMITE_INSTRUCCION = 1800;
 const SILENCIO_TUTOR_MS = 1800;
 const PAUSA_TURNO_MS = 1200;
+const LIMITE_APOYO_MS = 25000;
 
 function normalizarTurnos(turns: unknown): Turno[] {
   if (typeof turns === "string") return [{ role: "user", parts: [{ text: turns }] }];
@@ -83,12 +85,13 @@ export async function conectarGptLive(
   const canal = pc.createDataChannel("oai-events");
   let abierto = false;
   let iniciada = false;
+  let cerrado = false;
   let entradaAbierta = false;
-  let salidaAbierta = false;
   let ultimoFinEntrada = 0;
-  let ultimoFinSalida = 0;
   let contadorEventos = 0;
+  let entradaSilenciada: boolean | null = null;
   let temporizadorVoz: ReturnType<typeof setTimeout> | undefined;
+  let temporizadorApoyo: ReturnType<typeof setTimeout> | undefined;
   let resolverInicio: (() => void) | null = null;
   let rechazarInicio: ((error: Error) => void) | null = null;
 
@@ -96,12 +99,19 @@ export async function conectarGptLive(
     callbacks.onmessage(mensaje as unknown as LiveServerMessage);
   };
   const enviar = (evento: Record<string, unknown>) => {
-    if (abierto) canal.send(JSON.stringify(evento));
+    if (abierto && canal.readyState === "open") canal.send(JSON.stringify(evento));
   };
   const siguienteEvento = (prefijo: string) => `${prefijo}_${++contadorEventos}`;
+  const silenciarEntrada = (silenciado: boolean) => {
+    if (entradaSilenciada === silenciado) return;
+    entradaSilenciada = silenciado;
+    enviar({ type: silenciado ? "session.input_audio.mute" : "session.input_audio.unmute", event_id: siguienteEvento(silenciado ? "app_mute" : "app_unmute") });
+  };
   const cerrarTodo = () => {
+    cerrado = true;
     abierto = false;
     clearTimeout(temporizadorVoz);
+    clearTimeout(temporizadorApoyo);
     try { canal.close(); } catch { /* The channel may already be closed. */ }
     try { pc.close(); } catch { /* The connection may already be closed. */ }
   };
@@ -141,52 +151,39 @@ export async function conectarGptLive(
         break;
       }
       case "session.closed": {
+        const motivo = datosEvento.reason;
         iniciada = false;
+        if (motivo !== "close_requested" && !cerrado) callbacks.onclose?.({} as CloseEvent);
         break;
       }
       case "session.input_transcript.delta": {
-        const delta = typeof datosEvento.delta === "string" ? datosEvento.delta : "";
+        if (typeof datosEvento.delta !== "string" || !datosEvento.delta.trim()) break;
         const inicioMs = typeof datosEvento.start_ms === "number" ? datosEvento.start_ms : 0;
         const finMs = typeof datosEvento.end_ms === "number" ? datosEvento.end_ms : inicioMs;
-        if (salidaAbierta) {
-          salidaAbierta = false;
-          emitir({ serverContent: { outputTranscription: { finished: true } } });
-        }
-        if (!delta) break;
-        if (entradaAbierta && inicioMs - ultimoFinEntrada > PAUSA_TURNO_MS) {
-          entradaAbierta = false;
-          emitir({ serverContent: { inputTranscription: { finished: true } } });
-        }
+        if (!entradaAbierta || inicioMs - ultimoFinEntrada > PAUSA_TURNO_MS) emitir({ turnoEstudiante: true });
         entradaAbierta = true;
         ultimoFinEntrada = finMs;
-        emitir({ serverContent: { inputTranscription: { text: delta } } });
         break;
       }
       case "session.output_transcript.delta": {
-        const delta = typeof datosEvento.delta === "string" ? datosEvento.delta : "";
-        const inicioMs = typeof datosEvento.start_ms === "number" ? datosEvento.start_ms : 0;
-        const finMs = typeof datosEvento.end_ms === "number" ? datosEvento.end_ms : inicioMs;
-        if (entradaAbierta) {
-          entradaAbierta = false;
-          emitir({ serverContent: { inputTranscription: { finished: true } } });
-        }
-        if (!delta) break;
-        if (salidaAbierta && inicioMs - ultimoFinSalida > PAUSA_TURNO_MS) {
-          salidaAbierta = false;
-          emitir({ serverContent: { outputTranscription: { finished: true } } });
-        }
-        salidaAbierta = true;
-        ultimoFinSalida = finMs;
-        emitir({ serverContent: { outputTranscription: { text: delta } } });
+        entradaAbierta = false;
         emitir({ vozRemota: { hablando: true } });
         clearTimeout(temporizadorVoz);
-        temporizadorVoz = setTimeout(() => {
-          if (!salidaAbierta) emitir({ vozRemota: { hablando: false } });
-        }, SILENCIO_TUTOR_MS);
+        temporizadorVoz = setTimeout(() => emitir({ vozRemota: { hablando: false } }), SILENCIO_TUTOR_MS);
+        break;
+      }
+      case "session.delegation.created": {
+        emitir({ apoyo: true });
+        clearTimeout(temporizadorApoyo);
+        temporizadorApoyo = setTimeout(() => emitir({ apoyo: false }), LIMITE_APOYO_MS);
         break;
       }
       case "response.event": {
         const interno = datosEvento.event as Record<string, unknown> | undefined;
+        if (interno?.type === "response.completed" || interno?.type === "response.failed" || interno?.type === "response.incomplete" || interno?.type === "response.cancelled") {
+          clearTimeout(temporizadorApoyo);
+          emitir({ apoyo: false });
+        }
         if (interno?.type === "response.output_item.done") {
           const item = interno.item as Record<string, unknown> | undefined;
           if (item?.type === "function_call" && typeof item.name === "string") {
@@ -212,14 +209,16 @@ export async function conectarGptLive(
         break;
     }
   };
-  canal.onerror = () => callbacks.onerror?.({ message: "Error en el canal de datos." } as unknown as ErrorEvent);
+  canal.onerror = () => {
+    if (!cerrado) callbacks.onerror?.({ message: "Error en el canal de datos." } as unknown as ErrorEvent);
+  };
 
   pc.ontrack = (evento) => {
     const flujo = evento.streams[0] ?? new MediaStream([evento.track]);
     transporte?.salida(flujo);
   };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === "failed") callbacks.onerror?.({ message: "La conexión WebRTC con GPT-Live falló." } as unknown as ErrorEvent);
+    if (pc.connectionState === "failed" && !cerrado) callbacks.onerror?.({ message: "La conexión WebRTC con GPT-Live falló." } as unknown as ErrorEvent);
   };
 
   if (transporte?.flujo) {
@@ -247,8 +246,9 @@ export async function conectarGptLive(
   }
 
   const sesion: SesionAdaptada = {
-    sendRealtimeInput: () => {
-      // Audio travels on the WebRTC media track; the app mutes the track directly.
+    sendRealtimeInput: (params) => {
+      if (params.activityStart) silenciarEntrada(false);
+      else if (params.activityEnd || params.audioStreamEnd) silenciarEntrada(true);
     },
     sendClientContent: (params) => {
       for (const turno of normalizarTurnos(params.turns)) {
@@ -265,8 +265,13 @@ export async function conectarGptLive(
     },
     agregarInstruccion: instruir,
     agregarMensajeUsuario: enviarAlBackend,
+    silenciarEntrada,
     close: () => {
+      if (cerrado) return;
       if (abierto && iniciada) {
+        cerrado = true;
+        clearTimeout(temporizadorVoz);
+        clearTimeout(temporizadorApoyo);
         enviar({ type: "session.close", event_id: siguienteEvento("app_close") });
         setTimeout(cerrarTodo, 1500);
         return;

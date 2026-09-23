@@ -7,10 +7,10 @@ import { Icon } from "./icons";
 import { useLearning } from "./learning-provider";
 import { useConversacionEnVivo } from "./live-conversation";
 import { useConversacionOpenAI } from "./live-conversation-openai";
-import RealtimeEnglishTutor from "./realtime-tutor";
+import { useConversacionMini } from "./live-conversation-mini";
 import type { MensajeConversacion } from "./live-session";
 import { NOMBRES_MODO } from "../../lib/practice-config";
-import { PracticeSettings, usePreferenciasVoz, type ProveedorVoz } from "./practice-settings";
+import { datosProveedor, PracticeSettings, usePreferenciasVoz, type ProveedorVoz } from "./practice-settings";
 import styles from "./practice.module.css";
 
 type Conversacion = ReturnType<typeof useConversacionEnVivo>;
@@ -54,18 +54,18 @@ function Duracion({ inicio, fin }: { inicio: number | null; fin: number | null }
   return <span className={styles.duration} aria-label="Duración de la conversación">{formatoDuracion(inicio ? Math.max(0, Math.floor(((fin ?? ahora) - inicio) / 1000)) : 0)}</span>;
 }
 
-function Transcripcion({ mensajes }: { mensajes: MensajeConversacion[] }) {
+function Transcripcion({ mensajes, soloTutor = false }: { mensajes: MensajeConversacion[]; soloTutor?: boolean }) {
   const lista = useRef<HTMLDivElement>(null);
   const seguir = useRef(true);
   useEffect(() => {
     if (lista.current && seguir.current) lista.current.scrollTop = lista.current.scrollHeight;
   }, [mensajes]);
-  return <div className={styles.transcript} id="voice-transcript" ref={lista} role="region" aria-label="Transcripción de la conversación" tabIndex={0} onScroll={() => {
+  return <div className={styles.transcript} id="voice-transcript" ref={lista} role="region" aria-label={soloTutor ? "Subtítulos de Bloom" : "Transcripción de la conversación"} tabIndex={0} onScroll={() => {
     const el = lista.current;
     if (el) seguir.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   }}>
-    <p className={styles.transcriptHeading}>TRANSCRIPCIÓN EN VIVO</p>
-    {!mensajes.length && <p className={styles.transcriptEmpty}>Lo que conversemos aparecerá aquí.</p>}
+    <p className={styles.transcriptHeading}>{soloTutor ? "SUBTÍTULOS DE BLOOM" : "TRANSCRIPCIÓN EN VIVO"}</p>
+    {!mensajes.length && <p className={styles.transcriptEmpty}>{soloTutor ? "Lo que diga Bloom aparecerá aquí." : "Lo que conversemos aparecerá aquí."}</p>}
     {mensajes.map(mensaje => <div className={styles.transcriptMessage} key={mensaje.id} data-speaker={mensaje.rol}>
       <span>{mensaje.rol === "tutor" ? "Bloom" : "Tú"}</span>
       <p>{mensaje.texto}</p>
@@ -77,8 +77,11 @@ function SalaVoz({ conversacion, titulo, proveedor, terminar, reintentar }: {
   conversacion: Conversacion; titulo: string; proveedor: ProveedorVoz; terminar: (repasar?: boolean) => void; reintentar: () => void;
 }) {
   const dialogo = useRef<HTMLDialogElement>(null);
-  const [subtitulos, setSubtitulos] = useState(false);
-  const [escribiendo, setEscribiendo] = useState(false);
+  const { nombre, capacidades } = datosProveedor(proveedor);
+  const [verSubtitulos, setSubtitulos] = useState(false);
+  const [escribir, setEscribiendo] = useState(false);
+  const subtitulos = verSubtitulos && !!capacidades.subtitulos;
+  const escribiendo = escribir && capacidades.escritura;
   const [texto, setTexto] = useState("");
   const [ayudas, setAyudas] = useState(false);
   const { estado, error, micSilenciado, tutorHablando, estudianteHablando, esperandoRespuesta, mensajes, inicio, fin, niveles, silenciar, enviarTexto, pulsar } = conversacion;
@@ -91,7 +94,7 @@ function SalaVoz({ conversacion, titulo, proveedor, terminar, reintentar }: {
     conectando: ["Preparando tu conversación", "Permite el micrófono si tu navegador lo solicita."],
     escuchando: [estudianteHablando || conversacion.pulsando ? "Te escucho" : "Te toca a ti", manual ? "Suelta el botón cuando termines tu idea." : "Habla con naturalidad. Puedes hacer pausas."],
     hablando: ["Bloom está hablando", micSilenciado ? "Tu micrófono está silenciado." : "Puedes interrumpirme cuando quieras."],
-    pensando: ["Un momento…", "Estoy preparando mi respuesta."],
+    pensando: conversacion.apoyoActivo && capacidades.apoyo ? [`Consultando a ${capacidades.apoyo}`, "Bloom prepara una explicación más completa para ti."] : ["Un momento…", "Estoy preparando mi respuesta."],
     silenciada: [manual ? "A tu ritmo" : "Micrófono silenciado", manual ? "Mantén pulsado el micrófono para hablar." : "Actívalo cuando quieras seguir hablando."],
     error: ["Hagamos una pausa", error || "La conversación terminó. Puedes volver a conectar."],
   };
@@ -122,9 +125,11 @@ function SalaVoz({ conversacion, titulo, proveedor, terminar, reintentar }: {
     <div className={styles.roomInner} data-expanded={subtitulos || escribiendo || ayudas}>
       <header className={styles.roomHeader}>
         <div className={styles.roomBrand}><span className="brand-mark"><i/><i/><i/><i/></span><span>bloom<span className={styles.brandDot}>.</span><small>Modo de voz</small></span></div>
-        <button className={styles.captionButton} type="button" aria-label={subtitulos ? "Ocultar transcripción" : "Mostrar transcripción"} aria-pressed={subtitulos} aria-controls="voice-transcript" onClick={() => setSubtitulos(!subtitulos)}><Icon name="captions" size={23}/></button>
+        {capacidades.subtitulos
+          ? <button className={styles.captionButton} type="button" aria-label={subtitulos ? "Ocultar subtítulos" : "Mostrar subtítulos"} aria-pressed={subtitulos} aria-controls="voice-transcript" onClick={() => setSubtitulos(!subtitulos)}><Icon name="captions" size={23}/></button>
+          : <span className={styles.voiceOnly}><Icon name="headphones" size={14}/>Solo voz</span>}
       </header>
-      <div className={styles.sessionMeta}><span><Icon name="headphones" size={14}/>{titulo}</span><span><Icon name="sparkles" size={14}/>{proveedor === "mini" ? "Realtime Mini" : proveedor === "openai" ? "GPT Live 1" : "Gemini 3.8 Live"}</span><Duracion inicio={inicio} fin={fin}/></div>
+      <div className={styles.sessionMeta}><span><Icon name="headphones" size={14}/>{titulo}</span><span className={styles.providerTag}><Icon name="sparkles" size={14}/>{nombre}{capacidades.apoyo && <small>+ {capacidades.apoyo}</small>}</span><Duracion inicio={inicio} fin={fin}/></div>
       <div className={styles.contextBadge}>{conversacion.ayudaActiva ? "Pausa para aprender · Bloom es tu profesor" : conversacion.configuracion.modo === "simulacion" ? `Tú: ${conversacion.papelActual === "huesped" ? "huésped" : "colaborador"} · Bloom: ${conversacion.papelActual === "huesped" ? "colaborador" : "huésped"}` : NOMBRES_MODO[conversacion.configuracion.modo]}</div>
       <div className={styles.stage}>
         <Esfera fase={fase} niveles={niveles}/>
@@ -135,7 +140,7 @@ function SalaVoz({ conversacion, titulo, proveedor, terminar, reintentar }: {
         </div>
         {fallida && <button className={styles.retryButton} onClick={reintentar}><Icon name="repeat" size={18}/>Volver a conectar</button>}
       </div>
-      {subtitulos && <Transcripcion mensajes={mensajes}/>}
+      {subtitulos && <Transcripcion mensajes={mensajes} soloTutor={capacidades.subtitulos === "tutor"}/>}
       {conectado && <div className={styles.helpArea}>
         <button className={styles.helpToggle} aria-expanded={ayudas} aria-controls="voice-help" onClick={() => setAyudas(!ayudas)}><Icon name="sparkles" size={16}/>{ayudas ? "Ocultar ayuda" : "Necesito una mano"}</button>
         {ayudas && <div className={styles.helpActions} id="voice-help">
@@ -157,7 +162,7 @@ function SalaVoz({ conversacion, titulo, proveedor, terminar, reintentar }: {
       </form>}
       <footer className={styles.roomFooter}>
         <div className={styles.controls}>
-          <div><button className={styles.controlButton} disabled={!conectado} onClick={alternarTexto} aria-label={escribiendo ? "Cerrar teclado" : "Escribir un mensaje"} aria-pressed={escribiendo}><Icon name="keyboard" size={23}/></button><span>Escribir</span></div>
+          {capacidades.escritura && <div><button className={styles.controlButton} disabled={!conectado} onClick={alternarTexto} aria-label={escribiendo ? "Cerrar teclado" : "Escribir un mensaje"} aria-pressed={escribiendo}><Icon name="keyboard" size={23}/></button><span>Escribir</span></div>}
           <div>{manual ? <button className={`${styles.controlButton} ${styles.micButton} ${styles.holdButton}`} disabled={!conectado} aria-label="Mantener pulsado para hablar" aria-pressed={conversacion.pulsando} data-holding={conversacion.pulsando}
             onPointerDown={e => { if (e.button !== 0) return; e.currentTarget.setPointerCapture(e.pointerId); setEscribiendo(false); conversacion.pulsar(true); }}
             onPointerUp={() => conversacion.pulsar(false)} onPointerCancel={() => conversacion.pulsar(false)} onLostPointerCapture={() => conversacion.pulsar(false)} onBlur={() => conversacion.pulsar(false)} onContextMenu={e => e.preventDefault()}
@@ -166,7 +171,7 @@ function SalaVoz({ conversacion, titulo, proveedor, terminar, reintentar }: {
             : <button className={`${styles.controlButton} ${styles.micButton}`} data-muted={micSilenciado} disabled={!conectado} onClick={() => { silenciar(!micSilenciado); if (micSilenciado) setEscribiendo(false); }} aria-label={micSilenciado ? "Activar micrófono" : "Silenciar micrófono"} aria-pressed={micSilenciado}><Icon name={micSilenciado ? "mic-off" : "mic"} size={27}/></button>}<span>{manual ? (conversacion.pulsando ? "Hablando" : "Mantén pulsado") : micSilenciado ? "Activar" : "Silenciar"}</span></div>
           <div><button className={`${styles.controlButton} ${styles.endButton}`} onClick={() => terminar()} aria-label={estado === "conectando" ? "Cancelar conexión" : "Terminar conversación"}><Icon name="close" size={27}/></button><span>{estado === "conectando" ? "Cancelar" : "Terminar"}</span></div>
         </div>
-        <p>{escribiendo ? "El micrófono está silenciado mientras escribes." : "Un espacio para hablar, escuchar y volver a intentar."}</p>
+        <p>{escribiendo ? "El micrófono está silenciado mientras escribes." : capacidades.escritura ? "Un espacio para hablar, escuchar y volver a intentar." : "Solo voz: habla con naturalidad, Bloom te escucha."}</p>
       </footer>
     </div>
   </dialog>;
@@ -177,8 +182,9 @@ export function Practice() {
   const escenarios = useQuery(api.escenarios.listar);
   const gemini = useConversacionEnVivo();
   const openai = useConversacionOpenAI();
+  const mini = useConversacionMini();
   const { configuracion, cambiar, proveedor, cambiarProveedor } = usePreferenciasVoz();
-  const conversacion = proveedor === "openai" ? openai : gemini;
+  const conversacion = proveedor === "openai" ? openai : proveedor === "mini" ? mini : gemini;
   const [escenarioId, setEscenarioId] = useState("");
   const [salaAbierta, setSalaAbierta] = useState(false);
   const [resumen, setResumen] = useState<{ duracion: number; turnos: number } | null>(null);
@@ -187,20 +193,6 @@ export function Practice() {
   const escenario = escenarios?.find(item => item.id === idSeleccionado);
   const listo = configuracion.modo !== "simulacion" || (idSeleccionado === "personalizado" ? !!configuracion.tema.trim() : !!escenario);
   const titulo = configuracion.modo === "simulacion" ? escenario?.titulo ?? "Tu situación" : NOMBRES_MODO[configuracion.modo];
-
-  // Realtime Mini usa un flujo mínimo y directo: solo WebRTC del navegador
-  // con el token efímero de /api/realtime-token. Sin Convex ni ConversacionLive.
-  if (proveedor === "mini") {
-    return <div className={styles.practice}>
-      <section className={styles.heading}>
-        <p className={styles.eyebrow}>CONVERSA CON BLOOM</p>
-        <h1>Hoy, a <em>tu manera.</em></h1>
-        <p>Realtime Mini: voz directa, ligera y económica.</p>
-      </section>
-      <PracticeSettings configuracion={configuracion} cambiar={cambiar} proveedor={proveedor} cambiarProveedor={cambiarProveedor} escenarios={escenarios} escenarioId={idSeleccionado} elegirEscenario={setEscenarioId}/>
-      <RealtimeEnglishTutor/>
-    </div>;
-  }
 
   function comenzar() {
     if (!listo) return;
@@ -211,7 +203,7 @@ export function Practice() {
     void conversacion.iniciar(idSeleccionado, level, configuracion);
   }
   function terminar(repasar = false) {
-    const turnos = conversacion.mensajes.filter(mensaje => mensaje.rol === "estudiante").length;
+    const turnos = conversacion.turnos;
     if (conversacion.inicio && turnos) {
       setResumen({ duracion: Math.floor(((conversacion.fin ?? Date.now()) - conversacion.inicio) / 1000), turnos });
     }
@@ -227,7 +219,7 @@ export function Practice() {
       <p>Cada conversación cuenta. Sigue a tu ritmo.</p>
       <div className={styles.summaryStats}><div><strong>{formatoDuracion(resumen.duracion)}</strong><span>conversando</span></div><div><strong>{resumen.turnos}</strong><span>{resumen.turnos === 1 ? "intervención tuya" : "intervenciones tuyas"}</span></div></div>
       {conversacion.estadoResumen === "preparando" && <p role="status">Preparando tu repaso… El micrófono ya está apagado.</p>}
-      {conversacion.estadoResumen === "no_disponible" && <p role="status">No se pudo preparar el repaso. Tu conversación sigue disponible abajo.</p>}
+      {conversacion.estadoResumen === "no_disponible" && <p role="status">{conversacion.mensajes.length ? "No se pudo preparar el repaso. Tu conversación sigue disponible abajo." : "No se pudo preparar el repaso esta vez."}</p>}
       {conversacion.resumen && <div className={styles.review}>
         <article><span>LO QUE LOGRASTE</span><p>{conversacion.resumen.logro.detalle}</p><blockquote>{conversacion.resumen.logro.evidencia}</blockquote></article>
         {conversacion.resumen.correcciones.map((c, i) => <article key={i}><span>PARA SEGUIR MEJORANDO</span><p className={styles.original}>{c.original}</p><p lang="en" className={styles.improvement}>{c.mejora}</p><p>{c.explicacion}</p></article>)}
@@ -235,8 +227,10 @@ export function Practice() {
       </div>}
       <button className={styles.startButton} onClick={comenzar}><Icon name="mic" size={20}/>Volver a conversar</button>
       <button className={styles.secondaryButton} onClick={() => { conversacion.finalizar(); setResumen(null); }}>Cambiar mi práctica<Icon name="arrow" size={17}/></button>
-      <button className={styles.transcriptToggle} aria-expanded={verResumen} onClick={() => setVerResumen(!verResumen)}><Icon name="captions" size={18}/>{verResumen ? "Ocultar conversación" : "Ver conversación"}</button>
-      {verResumen && <Transcripcion mensajes={conversacion.mensajes}/>}
+      {conversacion.mensajes.length > 0 && <>
+        <button className={styles.transcriptToggle} aria-expanded={verResumen} onClick={() => setVerResumen(!verResumen)}><Icon name="captions" size={18}/>{verResumen ? "Ocultar conversación" : "Ver conversación"}</button>
+        {verResumen && <Transcripcion mensajes={conversacion.mensajes} soloTutor={datosProveedor(proveedor).capacidades.subtitulos === "tutor"}/>}
+      </>}
     </section> : <>
       <section className={styles.heading}>
         <p className={styles.eyebrow}>CONVERSA CON BLOOM</p>

@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import { buscarEscenario, construirInstruccion } from "./conversacionEscenarios";
 import { nivelIngles } from "./schema";
 import type { ConfiguracionPractica } from "../lib/practice-config";
-import { DESCRIPCION_GUARDAR_PROGRESO, ESQUEMA_GUARDAR_PROGRESO } from "../lib/practice-tools";
+import { DESCRIPCION_ENTREGAR_RESUMEN, DESCRIPCION_GUARDAR_PROGRESO, ESQUEMA_ENTREGAR_RESUMEN, ESQUEMA_GUARDAR_PROGRESO, INSTRUCCION_HERRAMIENTAS_MINI } from "../lib/practice-tools";
 
 // gpt-realtime-2.1-mini connects straight to the Realtime API over WebRTC.
 // Function calling is handled here in Convex — no extra LLM in the loop.
@@ -63,6 +63,8 @@ export const prepararSesionMini = action({
     if (progresoPrevio) {
       instruccion += `\nLearner memory from previous sessions: ${progresoPrevio}. Naturally reuse the phrases to practice during the conversation; do not quiz the learner about this list.`;
     }
+    instruccion += `\n${INSTRUCCION_HERRAMIENTAS_MINI}`;
+    const manual = args.configuracion?.escucha === "pulsar";
     const respuesta = await fetch(URL_SECRETOS_REALTIME, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -71,21 +73,26 @@ export const prepararSesionMini = action({
           type: "realtime",
           model: modelo,
           instructions: instruccion,
+          output_modalities: ["audio"],
+          max_output_tokens: "inf",
+          reasoning: { effort: process.env.OPENAI_ESFUERZO_MINI ?? "low" },
           audio: {
             input: {
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.5,
-                prefix_padding_ms: 250,
-                silence_duration_ms: 800,
+              noise_reduction: { type: process.env.OPENAI_RUIDO_MINI === "near_field" ? "near_field" : "far_field" },
+              transcription: null,
+              turn_detection: manual ? null : {
+                type: "semantic_vad",
+                eagerness: "low",
                 create_response: true,
                 interrupt_response: true,
               },
-              transcription: { model: "whisper-1" },
             },
             output: { voice: voz },
           },
-          tools: [{ type: "function", name: "guardar_progreso", description: DESCRIPCION_GUARDAR_PROGRESO, parameters: ESQUEMA_GUARDAR_PROGRESO }],
+          tools: [
+            { type: "function", name: "guardar_progreso", description: DESCRIPCION_GUARDAR_PROGRESO, parameters: ESQUEMA_GUARDAR_PROGRESO },
+            { type: "function", name: "entregar_resumen", description: DESCRIPCION_ENTREGAR_RESUMEN, parameters: ESQUEMA_ENTREGAR_RESUMEN },
+          ],
           tool_choice: "auto",
         },
       }),

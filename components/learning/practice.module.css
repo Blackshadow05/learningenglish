@@ -57,6 +57,9 @@
 .brandDot { color: #90a777; }
 .captionButton { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; color: var(--voice-muted); }
 .captionButton[aria-pressed="true"] { color: #786196; background: #ece6f3; }
+.voiceOnly { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 12px; border: 1px solid #e8e4eb; border-radius: 100px; font-size: .62rem; color: var(--voice-muted); }
+.providerTag { display: inline-flex; align-items: center; gap: 6px; font-size: .66rem; color: var(--voice-muted); }
+.providerTag small { font-size: .6rem; color: var(--voice-accent); }
 .sessionMeta { display: flex; flex-direction: column; gap: 9px; align-items: center; margin: 28px 0 0; }
 .sessionMeta > span:first-child { display: inline-flex; align-items: center; justify-content: center; gap: 7px; font-size: .7rem; color: var(--voice-muted); padding: 8px 13px; border: 1px solid #e8e4eb; border-radius: 100px; text-align: center; }
 .duration { font-variant-numeric: tabular-nums; font-size: .67rem; color: #9c98a5; letter-spacing: 1px; }
@@ -182,7 +185,7 @@
   .halo { opacity: .17; }
   .visualizer[data-phase="hablando"] .halo { opacity: .3; }
   .orb { box-shadow: inset 0 0 18px #ffffff88, 0 15px 50px #bda0ff16; }
-  .sessionMeta > span:first-child, .transcript { border-color: #3a3443; }
+  .sessionMeta > span:first-child, .transcript, .voiceOnly { border-color: #3a3443; }
   .captionButton[aria-pressed="true"], .controlButton[aria-pressed="true"] { background: #43374f; color: #d5bdea; }
   .controlButton { background: #302b38; color: #bbb0c6; }
   .controlButton:hover:not(:disabled) { background: #40364d; }
