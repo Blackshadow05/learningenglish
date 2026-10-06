@@ -10,7 +10,8 @@ import type {
 } from "@google/genai";
 
 export type DatosSesionGpt = { token: string; modelo: string; instruccion: string; voz: string; sesionJson?: string };
-export type TransporteAudio = { flujo: MediaStream | null; salida: (flujoRemoto: MediaStream) => void };
+export type ActividadVoz = { clara: number; total: number };
+export type TransporteAudio = { flujo: MediaStream | null; salida: (flujoRemoto: MediaStream) => void; actividad?: () => ActividadVoz };
 export type CrearSesionWebrtc = (args: { sdp: string; sesionJson: string }) => Promise<{ sesionId: string; sdp: string }>;
 
 type Turno = { role: string; parts: { text?: string }[] };

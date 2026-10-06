@@ -48,6 +48,7 @@ export const prepararSesionMini = action({
     escenarioId: v.string(),
     nivel: v.union(nivelIngles, v.null()),
     configuracion: v.optional(configuracionPractica),
+    turnosCliente: v.optional(v.boolean()),
   },
   returns: v.object({
     token: v.string(), modelo: v.string(), voz: v.string(), instruccion: v.string(), progresoPrevio: v.string(),
@@ -79,11 +80,8 @@ export const prepararSesionMini = action({
           audio: {
             input: {
               noise_reduction: { type: process.env.OPENAI_RUIDO_MINI === "near_field" ? "near_field" : "far_field" },
-              transcription: {
-                model: process.env.OPENAI_TRANSCRIPCION_MINI ?? "gpt-4o-mini-transcribe",
-                prompt: "An adult Spanish speaker practicing spoken English; they may mix in Spanish words.",
-              },
-              turn_detection: manual ? null : {
+              transcription: { model: process.env.OPENAI_TRANSCRIPCION_MINI ?? "gpt-4o-mini-transcribe" },
+              turn_detection: manual || args.turnosCliente ? null : {
                 type: "semantic_vad",
                 eagerness: "low",
                 create_response: true,
