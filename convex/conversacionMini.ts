@@ -79,7 +79,10 @@ export const prepararSesionMini = action({
           audio: {
             input: {
               noise_reduction: { type: process.env.OPENAI_RUIDO_MINI === "near_field" ? "near_field" : "far_field" },
-              transcription: null,
+              transcription: {
+                model: process.env.OPENAI_TRANSCRIPCION_MINI ?? "gpt-4o-mini-transcribe",
+                prompt: "An adult Spanish speaker practicing spoken English; they may mix in Spanish words.",
+              },
               turn_detection: manual ? null : {
                 type: "semantic_vad",
                 eagerness: "low",

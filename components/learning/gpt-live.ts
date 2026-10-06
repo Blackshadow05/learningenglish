@@ -20,6 +20,7 @@ type SesionAdaptada = {
   sendToolResponse: (params: LiveSendToolResponseParameters) => void;
   agregarInstruccion: (texto: string) => void;
   agregarMensajeUsuario: (texto: string) => void;
+  agregarContexto: (texto: string) => void;
   silenciarEntrada: (silenciado: boolean) => void;
   close: () => void;
 };
@@ -120,6 +121,10 @@ export async function conectarGptLive(
     enviar({ type: "session.instructions.append", event_id: siguienteEvento("app_instruction"), delegation_id: null, content: texto.slice(0, LIMITE_INSTRUCCION) });
   };
 
+  const pensar = (texto: string) => {
+    enviar({ type: "session.thinking.append", event_id: siguienteEvento("app_thinking"), delegation_id: null, content: texto.slice(0, LIMITE_INSTRUCCION) });
+  };
+
   const enviarAlBackend = (texto: string) => {
     enviar({ type: "response.item.create", event_id: siguienteEvento("app_message"), item: { type: "message", role: "user", content: [{ type: "input_text", text: texto }] } });
     enviar({ type: "response.create", event_id: siguienteEvento("app_continue") });
@@ -157,16 +162,23 @@ export async function conectarGptLive(
         break;
       }
       case "session.input_transcript.delta": {
-        if (typeof datosEvento.delta !== "string" || !datosEvento.delta.trim()) break;
+        const delta = typeof datosEvento.delta === "string" ? datosEvento.delta : "";
+        if (!delta.trim()) {
+          if (delta && entradaAbierta) emitir({ textoInterno: { rol: "estudiante", texto: delta } });
+          break;
+        }
         const inicioMs = typeof datosEvento.start_ms === "number" ? datosEvento.start_ms : 0;
         const finMs = typeof datosEvento.end_ms === "number" ? datosEvento.end_ms : inicioMs;
-        if (!entradaAbierta || inicioMs - ultimoFinEntrada > PAUSA_TURNO_MS) emitir({ turnoEstudiante: true });
+        const nuevoTurno = !entradaAbierta || inicioMs - ultimoFinEntrada > PAUSA_TURNO_MS;
+        if (nuevoTurno) emitir({ turnoEstudiante: true });
+        emitir({ textoInterno: { rol: "estudiante", texto: delta, nuevoTurno } });
         entradaAbierta = true;
         ultimoFinEntrada = finMs;
         break;
       }
       case "session.output_transcript.delta": {
         entradaAbierta = false;
+        if (typeof datosEvento.delta === "string" && datosEvento.delta) emitir({ textoInterno: { rol: "tutor", texto: datosEvento.delta } });
         emitir({ vozRemota: { hablando: true } });
         clearTimeout(temporizadorVoz);
         temporizadorVoz = setTimeout(() => emitir({ vozRemota: { hablando: false } }), SILENCIO_TUTOR_MS);
@@ -265,6 +277,7 @@ export async function conectarGptLive(
     },
     agregarInstruccion: instruir,
     agregarMensajeUsuario: enviarAlBackend,
+    agregarContexto: pensar,
     silenciarEntrada,
     close: () => {
       if (cerrado) return;

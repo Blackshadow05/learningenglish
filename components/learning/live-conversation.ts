@@ -11,8 +11,10 @@ export type Conversacion = ReturnType<typeof useConversacionEnVivo>;
 
 export function useConversacionEnVivo() {
   const crearToken = useAction(api.conversacion.crearTokenLive);
+  const evaluarTurno = useAction(api.decisiones.evaluarTurno);
   const [conversacion] = useState(() => new ConversacionLive({
     crearToken,
+    decidir: (args) => evaluarTurno(args),
     conectar: (datos, callbacks, preferencias) => new GoogleGenAI({
       apiKey: datos.token,
       apiVersion: "v1alpha",

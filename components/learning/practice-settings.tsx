@@ -7,12 +7,14 @@ import styles from "./practice.module.css";
 
 const CLAVE = "bloom.voice.preferences.v1";
 const CLAVE_PROVEEDOR = "bloom.voice.provider.v1";
-export type ProveedorVoz = "gemini" | "openai" | "mini";
+export type ProveedorVoz = "gemini" | "openai" | "mini" | "auto";
+export type VozConcreta = Exclude<ProveedorVoz, "auto">;
 export type CapacidadesVoz = { subtitulos: "completos" | "tutor" | null; escritura: boolean; apoyo: string | null };
 export const PROVEEDORES: { id: ProveedorVoz; nombre: string; pista: string; capacidades: CapacidadesVoz }[] = [
   { id: "gemini", nombre: "Gemini 3.8 Live", pista: "Voz de Google en tiempo real, con transcripción completa.", capacidades: { subtitulos: "completos", escritura: true, apoyo: null } },
   { id: "openai", nombre: "GPT Live 1", pista: "Solo voz, sin transcripción. Se apoya en GPT-6 Luna cuando necesita explicarte algo a fondo.", capacidades: { subtitulos: null, escritura: false, apoyo: "GPT-6 Luna" } },
   { id: "mini", nombre: "Realtime Mini", pista: "Voz ligera y económica de OpenAI, con subtítulos de Bloom.", capacidades: { subtitulos: "tutor", escritura: true, apoyo: null } },
+  { id: "auto", nombre: "Automático", pista: "Bloom elige la voz para cada práctica: Realtime Mini para conversar, que es la más económica, y GPT Live 1 cuando necesitas explicaciones a fondo.", capacidades: { subtitulos: "tutor", escritura: true, apoyo: null } },
 ];
 export function datosProveedor(id: ProveedorVoz) {
   return PROVEEDORES.find(p => p.id === id) ?? PROVEEDORES[0];
@@ -25,7 +27,7 @@ export function usePreferenciasVoz() {
     queueMicrotask(() => {
       if (!activa) return;
       try { setConfiguracion(leerPreferencias(JSON.parse(localStorage.getItem(CLAVE) ?? "null"))); } catch { /* Optional device storage. */ }
-      try { const guardado = localStorage.getItem(CLAVE_PROVEEDOR); if (guardado === "openai" || guardado === "gemini" || guardado === "mini") setProveedor(guardado); } catch { /* Optional device storage. */ }
+      try { const guardado = localStorage.getItem(CLAVE_PROVEEDOR); if (guardado === "openai" || guardado === "gemini" || guardado === "mini" || guardado === "auto") setProveedor(guardado); } catch { /* Optional device storage. */ }
     });
     return () => { activa = false; };
   }, []);
@@ -41,9 +43,9 @@ export function usePreferenciasVoz() {
   return { configuracion, cambiar, proveedor, cambiarProveedor };
 }
 
-export function PracticeSettings({ configuracion: c, cambiar, proveedor, cambiarProveedor, escenarios, escenarioId, elegirEscenario }: {
+export function PracticeSettings({ configuracion: c, cambiar, proveedor, cambiarProveedor, vozAutomatica, escenarios, escenarioId, elegirEscenario }: {
   configuracion: ConfiguracionPractica; cambiar: (c: Partial<ConfiguracionPractica>) => void;
-  proveedor: ProveedorVoz; cambiarProveedor: (p: ProveedorVoz) => void;
+  proveedor: ProveedorVoz; cambiarProveedor: (p: ProveedorVoz) => void; vozAutomatica?: VozConcreta | null;
   escenarios: { id: string; titulo: string }[] | undefined; escenarioId: string; elegirEscenario: (id: string) => void;
 }) {
   return <div className={styles.setup}>
@@ -57,7 +59,7 @@ export function PracticeSettings({ configuracion: c, cambiar, proveedor, cambiar
       <div className={styles.roles} role="group" aria-label="Modelo de voz del tutor">
         {PROVEEDORES.map(p => <button key={p.id} aria-pressed={proveedor === p.id} onClick={() => cambiarProveedor(p.id)}>{p.nombre}</button>)}
       </div>
-      <p className={styles.roleHint}>{datosProveedor(proveedor).pista}</p>
+      <p className={styles.roleHint}>{datosProveedor(proveedor).pista}{proveedor === "auto" && vozAutomatica && <strong> Para esta práctica: {datosProveedor(vozAutomatica).nombre}.</strong>}</p>
     </div>
     {c.modo === "simulacion" && <div className={styles.scenario}>
       <p className={styles.fieldLabel}>TU PAPEL</p>

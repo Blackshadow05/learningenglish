@@ -10,6 +10,7 @@ import type { Conversacion } from "./live-conversation";
 export function useConversacionMini(): Conversacion {
   const prepararSesion = useAction(api.conversacionMini.prepararSesionMini);
   const ejecutarHerramienta = useAction(api.conversacionMini.ejecutarHerramientaMini);
+  const evaluarTurno = useAction(api.decisiones.evaluarTurno);
   const [conversacion] = useState(() => {
     let nivelActual: "sin_evaluar" | "A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null = null;
     return new ConversacionLive({
@@ -20,6 +21,7 @@ export function useConversacionMini(): Conversacion {
       conectar: (datos, callbacks, _preferencias, transporte) =>
         conectarRealtimeMini(datos, callbacks, transporte, (args) => ejecutarHerramienta({ ...args, nivel: nivelActual })),
       transcripcion: { estudiante: false, tutor: true },
+      decidir: (args) => evaluarTurno(args),
     });
   });
   const snapshot = useSyncExternalStore(conversacion.subscribe, conversacion.getSnapshot, conversacion.getSnapshot);
