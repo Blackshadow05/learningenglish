@@ -12,6 +12,7 @@ import type * as conversacion from "../conversacion.js";
 import type * as conversacionEscenarios from "../conversacionEscenarios.js";
 import type * as conversacionMini from "../conversacionMini.js";
 import type * as conversacionOpenai from "../conversacionOpenai.js";
+import type * as decisiones from "../decisiones.js";
 import type * as escenarios from "../escenarios.js";
 import type * as seed_vocabularioBasico from "../seed/vocabularioBasico.js";
 import type * as vocabulario from "../vocabulario.js";
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   conversacionEscenarios: typeof conversacionEscenarios;
   conversacionMini: typeof conversacionMini;
   conversacionOpenai: typeof conversacionOpenai;
+  decisiones: typeof decisiones;
   escenarios: typeof escenarios;
   "seed/vocabularioBasico": typeof seed_vocabularioBasico;
   vocabulario: typeof vocabulario;

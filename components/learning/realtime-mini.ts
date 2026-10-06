@@ -27,6 +27,7 @@ type SesionAdaptada = {
   sendToolResponse: (params: LiveSendToolResponseParameters) => void;
   agregarInstruccion: (texto: string) => void;
   agregarMensajeUsuario: (texto: string) => void;
+  agregarContexto: (texto: string) => void;
   solicitarResumen: (texto: string) => void;
   close: () => void;
 };
@@ -75,6 +76,8 @@ export async function conectarRealtimeMini(
   let tutorHablando = false;
   let soloTexto = false;
   let inicioPulsacion = 0;
+  let notas = 0;
+  let notaActual = "";
   let commitPendiente: ReturnType<typeof setTimeout> | undefined;
   let resolverInicio: (() => void) | null = null;
   let rechazarInicio: ((error: Error) => void) | null = null;
@@ -143,6 +146,13 @@ export async function conectarRealtimeMini(
         break;
       case "input_audio_buffer.committed":
         emitir({ turnoEstudiante: true });
+        if (texto("item_id")) emitir({ textoInterno: { rol: "estudiante", texto: "", item: texto("item_id") } });
+        break;
+      case "conversation.item.input_audio_transcription.delta":
+        if (texto("item_id") && texto("delta")) emitir({ textoInterno: { rol: "estudiante", texto: texto("delta"), item: texto("item_id") } });
+        break;
+      case "conversation.item.input_audio_transcription.completed":
+        if (texto("item_id")) emitir({ textoInterno: { rol: "estudiante", texto: texto("transcript"), item: texto("item_id"), final: true } });
         break;
       case "response.created":
         respuestaActiva = true;
@@ -282,6 +292,11 @@ export async function conectarRealtimeMini(
       interrumpir();
       agregarMensaje("user", texto);
       crearRespuesta();
+    },
+    agregarContexto: (texto) => {
+      if (notaActual) enviar({ type: "conversation.item.delete", item_id: notaActual });
+      notaActual = `bloom_nota_${++notas}`;
+      enviar({ type: "conversation.item.create", item: { id: notaActual, type: "message", role: "system", content: [{ type: "input_text", text: texto }] } });
     },
     solicitarResumen: (texto) => {
       soloTexto = true;

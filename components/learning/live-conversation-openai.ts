@@ -10,8 +10,10 @@ import type { Conversacion } from "./live-conversation";
 export function useConversacionOpenAI(): Conversacion {
   const prepararSesion = useAction(api.conversacionOpenai.prepararSesionLive);
   const crearSesionWebrtc = useAction(api.conversacionOpenai.crearSesionWebrtc);
+  const evaluarTurno = useAction(api.decisiones.evaluarTurno);
   const [conversacion] = useState(() => new ConversacionLive({
     crearToken: (args) => prepararSesion(args),
+    decidir: (args) => evaluarTurno(args),
     conectar: (datos, callbacks, _preferencias, transporte) => conectarGptLive(datos, callbacks, transporte, (args) => crearSesionWebrtc(args)),
     transcripcion: { estudiante: false, tutor: false },
   }));

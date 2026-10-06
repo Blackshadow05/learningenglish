@@ -1,24 +1,43 @@
 import type { LiveCallbacks, LiveServerMessage, Session } from "@google/genai";
 import { CONFIGURACION_INICIAL, MINUTOS_SESION_VOZ, type ConfiguracionPractica, type AccionAyuda, type PapelEstudiante, type ResumenPractica } from "../../lib/practice-config";
 import { validarResumen } from "../../lib/practice-review";
+import {
+  contextoDecision, ESTADO_PEDAGOGICO_INICIAL, notasSesion, planificarGuia,
+  type DecisionTurno, type EntradaDecision, type EstadoPedagogico, type NivelPerfil, type SolicitudDecision,
+} from "../../lib/practice-decisions";
 
 export type EstadoConversacion = "inactivo" | "conectando" | "en_vivo" | "finalizada" | "error";
 export type MensajeConversacion = { id: number; rol: "estudiante" | "tutor"; texto: string };
-type Nivel = "sin_evaluar" | "A1" | "A2" | "B1" | "B2" | "C1" | "C2";
+type Nivel = NivelPerfil;
 type DatosSesion = { token: string; modelo: string; instruccion: string; voz: string; sesionJson?: string };
 type RecursosTransporte = { flujo: MediaStream | null; salida: (flujoRemoto: MediaStream) => void };
 type Dependencias = {
   crearToken: (args: { escenarioId: string; nivel: Nivel | null; configuracion: ConfiguracionPractica }) => Promise<DatosSesion>;
   conectar: (datos: DatosSesion, callbacks: LiveCallbacks, configuracion: ConfiguracionPractica, transporte?: RecursosTransporte) => Promise<Session>;
   transcripcion?: Record<MensajeConversacion["rol"], boolean>;
+  decidir?: (args: SolicitudDecision) => Promise<DecisionTurno | null>;
 };
 type SesionExtendida = Session & {
   agregarInstruccion?: (texto: string) => void;
   agregarMensajeUsuario?: (texto: string) => void;
+  agregarContexto?: (texto: string) => void;
   silenciarEntrada?: (silenciado: boolean) => void;
   solicitarResumen?: (texto: string) => void;
 };
-type MensajeExtra = LiveServerMessage & { vozRemota?: { hablando: boolean }; turnoEstudiante?: boolean; apoyo?: boolean };
+type TextoInterno = { rol: MensajeConversacion["rol"]; texto: string; item?: string; final?: boolean; nuevoTurno?: boolean };
+type MensajeExtra = LiveServerMessage & { vozRemota?: { hablando: boolean }; turnoEstudiante?: boolean; apoyo?: boolean; textoInterno?: TextoInterno };
+type EntradaHistorial = EntradaDecision & { id: number };
+type OrigenHistorial = { mensaje?: number; item?: string; final?: boolean; nuevoTurno?: boolean };
+type Decisiones = {
+  activas: boolean;
+  enCurso: boolean;
+  pendiente: boolean;
+  firma: string;
+  fallos: number;
+  temporizador?: ReturnType<typeof setTimeout>;
+  estado: EstadoPedagogico;
+  guiaPendiente: string;
+};
 type Snapshot = {
   estado: EstadoConversacion;
   mensajes: MensajeConversacion[];
@@ -37,6 +56,7 @@ type Snapshot = {
   estadoResumen: "inactivo" | "preparando" | "listo" | "no_disponible";
   turnos: number;
   apoyoActivo: boolean;
+  enfoque: string | null;
 };
 type Recursos = {
   sesion: Session | null;
@@ -59,14 +79,29 @@ type Recursos = {
   remotoHablando: boolean;
   remotoSonando: boolean;
   ultimaSalida: number;
+  escenarioId: string;
+  historial: EntradaHistorial[];
+  historialMensajes: Map<number, EntradaHistorial>;
+  historialItems: Map<string, EntradaHistorial>;
+  decisiones: Decisiones;
 };
 
 const INICIAL: Snapshot = {
   estado: "inactivo", mensajes: [], error: "", micSilenciado: false,
   tutorHablando: false, estudianteHablando: false, esperandoRespuesta: false, inicio: null, fin: null,
   configuracion: CONFIGURACION_INICIAL, papelActual: "colaborador", ayudaActiva: false, pulsando: false,
-  resumen: null, estadoResumen: "inactivo", turnos: 0, apoyoActivo: false,
+  resumen: null, estadoResumen: "inactivo", turnos: 0, apoyoActivo: false, enfoque: null,
 };
+
+const ESPERA_DECISION_MS = 700;
+const MAX_HISTORIAL = 60;
+const MAX_ENTRADAS_DECISION = 10;
+const MAX_TEXTO_DECISION = 500;
+const MAX_FALLOS_DECISION = 3;
+
+function contarPalabras(texto: string) {
+  return texto.split(/\s+/).filter(Boolean).length;
+}
 
 // About 64ms per packet at 16kHz; output stays silent to avoid microphone feedback.
 const WORKLET = `
@@ -124,6 +159,7 @@ export class ConversacionLive {
   private listeners = new Set<() => void>();
   private actual: Recursos | null = null;
   private siguienteId = 0;
+  private siguienteEntrada = 0;
   readonly niveles = { entrada: 0, salida: 0 };
 
   constructor(private dependencias: Dependencias) {}
@@ -134,17 +170,119 @@ export class ConversacionLive {
     return () => { this.listeners.delete(listener); };
   };
   private actualizar(cambios: Partial<Snapshot>) {
+    const tutorHablaba = this.snapshot.tutorHablando;
     this.snapshot = { ...this.snapshot, ...cambios };
+    if (tutorHablaba !== this.snapshot.tutorHablando) this.cambioVozTutor(this.snapshot.tutorHablando);
     this.listeners.forEach((listener) => listener());
   }
 
-  private instruir(sesion: Session, texto: string) {
+  private instruir(r: Recursos, sesion: Session, texto: string) {
+    const guia = r.decisiones.guiaPendiente;
+    r.decisiones.guiaPendiente = "";
+    const completo = guia ? `${texto}\n${guia}` : texto;
     const extendida = sesion as SesionExtendida;
     if (extendida.agregarInstruccion) {
-      extendida.agregarInstruccion(texto);
+      extendida.agregarInstruccion(completo);
       return;
     }
-    sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: texto }] }], turnComplete: true });
+    sesion.sendClientContent({ turns: [{ role: "user", parts: [{ text: completo }] }], turnComplete: true });
+  }
+
+  private registrarHistorial(r: Recursos, rol: MensajeConversacion["rol"], texto: string, origen: OrigenHistorial = {}) {
+    let entrada = origen.mensaje !== undefined ? r.historialMensajes.get(origen.mensaje)
+      : origen.item ? r.historialItems.get(origen.item)
+        : undefined;
+    if (!entrada && origen.mensaje === undefined && !origen.item && !origen.nuevoTurno) {
+      const ultima = r.historial.at(-1);
+      if (ultima?.rol === rol) entrada = ultima;
+    }
+    if (!entrada) {
+      entrada = { id: ++this.siguienteEntrada, rol, texto: "" };
+      r.historial.push(entrada);
+      if (origen.mensaje !== undefined) r.historialMensajes.set(origen.mensaje, entrada);
+      if (origen.item) r.historialItems.set(origen.item, entrada);
+      if (r.historial.length > MAX_HISTORIAL) r.historial.splice(0, r.historial.length - MAX_HISTORIAL);
+    }
+    entrada.texto = origen.final ? texto : entrada.texto + texto;
+  }
+
+  private cambioVozTutor(hablando: boolean) {
+    const r = this.actual;
+    if (!r) return;
+    clearTimeout(r.decisiones.temporizador);
+    if (!hablando && !r.cerrando) r.decisiones.temporizador = setTimeout(() => void this.decidir(r), ESPERA_DECISION_MS);
+  }
+
+  private async decidir(r: Recursos) {
+    const decidir = this.dependencias.decidir;
+    const d = r.decisiones;
+    if (!decidir || !d.activas || this.actual !== r || r.cerrando || !r.sesion || this.snapshot.estado !== "en_vivo") return;
+    if (d.enCurso) { d.pendiente = true; return; }
+    const alumno = r.historial.findLast((entrada) => entrada.rol === "estudiante" && entrada.texto.trim());
+    if (!alumno) return;
+    const firma = `${alumno.id}:${alumno.texto.length}`;
+    if (firma === d.firma) return;
+    d.firma = firma;
+    d.enCurso = true;
+    const tutorRespondio = r.historial.slice(r.historial.indexOf(alumno) + 1).some((entrada) => entrada.rol === "tutor" && entrada.texto.trim());
+    const historial = r.historial
+      .filter((entrada) => entrada.texto.trim())
+      .slice(-MAX_ENTRADAS_DECISION)
+      .map(({ rol, texto }) => ({ rol, texto: texto.trim().slice(-MAX_TEXTO_DECISION) }));
+    try {
+      const decision = await decidir({
+        escenarioId: r.escenarioId,
+        configuracion: this.snapshot.configuracion,
+        historial,
+        contexto: contextoDecision(d.estado, this.snapshot.ayudaActiva, this.snapshot.papelActual),
+      });
+      d.fallos = decision ? 0 : d.fallos + 1;
+      if (decision && this.actual === r && !r.cerrando) this.aplicarDecision(r, decision, alumno, tutorRespondio, historial);
+    } catch {
+      d.fallos += 1;
+    } finally {
+      d.enCurso = false;
+      if (d.fallos >= MAX_FALLOS_DECISION) d.activas = false;
+      if (d.pendiente && this.actual === r) {
+        d.pendiente = false;
+        void this.decidir(r);
+      }
+    }
+  }
+
+  private aplicarDecision(r: Recursos, decision: DecisionTurno, alumno: EntradaHistorial, tutorRespondio: boolean, historial: EntradaDecision[]) {
+    const recientes = (rol: MensajeConversacion["rol"]) => historial.filter((entrada) => entrada.rol === rol).slice(-3).reduce((suma, entrada) => suma + contarPalabras(entrada.texto), 0);
+    const plan = planificarGuia(decision, r.decisiones.estado, {
+      configuracion: this.snapshot.configuracion,
+      ayudaActiva: this.snapshot.ayudaActiva,
+      tutorRespondio,
+      palabrasUltimoTurno: contarPalabras(alumno.texto),
+      palabrasEstudiante: recientes("estudiante"),
+      palabrasTutor: recientes("tutor"),
+    });
+    r.decisiones.estado = plan.estado;
+    const sesion = r.sesion;
+    if (!sesion) return;
+    const vigente = r.historial.findLast((entrada) => entrada.rol === "estudiante" && entrada.texto.trim()) === alumno;
+    const vista = this.snapshot;
+    const libre = !vista.tutorHablando && !vista.estudianteHablando && !vista.pulsando && !vista.esperandoRespuesta && !vista.apoyoActivo;
+    try {
+      if (plan.guia) {
+        const extendida = sesion as SesionExtendida;
+        if (extendida.agregarContexto) extendida.agregarContexto(plan.guia);
+        else r.decisiones.guiaPendiente = plan.guia;
+      }
+      if (plan.intervencion && vigente && libre) {
+        this.instruir(r, sesion, plan.intervencion);
+        this.actualizar({ esperandoRespuesta: true });
+      }
+    } catch {
+      return;
+    }
+    const cambios: Partial<Snapshot> = {};
+    if (plan.enfoque !== this.snapshot.enfoque) cambios.enfoque = plan.enfoque;
+    if (plan.ayudaActiva !== undefined && plan.ayudaActiva !== this.snapshot.ayudaActiva) cambios.ayudaActiva = plan.ayudaActiva;
+    if (Object.keys(cambios).length) this.actualizar(cambios);
   }
 
   private enviarAlBackend(sesion: Session, texto: string) {
@@ -193,6 +331,7 @@ export class ConversacionLive {
     if (!r) return;
     clearTimeout(r.timeout);
     clearTimeout(r.cierrePulsacion);
+    clearTimeout(r.decisiones.temporizador);
     clearInterval(r.medidor);
     this.pararReproduccion(r);
     if (r.captura) {
@@ -240,10 +379,11 @@ export class ConversacionLive {
     const evidencia = this.transcribe("estudiante")
       ? `Use ONLY these learner transcripts as evidence: ${JSON.stringify(intervenciones.map(m => m.texto))}`
       : "Use ONLY the learner's own words from this conversation as evidence, quoted exactly as they said them.";
+    const notas = notasSesion(r.decisiones.estado);
     try {
       if (this.snapshot.configuracion.escucha !== "pulsar") r.sesion.sendRealtimeInput({ audioStreamEnd: true });
       else if (r.pulsacion) r.sesion.sendRealtimeInput({ activityEnd: {} });
-      this.pedirResumen(r.sesion, `The application has ended the practice. Do not speak. First call guardar_progreso if that tool is available (quote only verbatim learner words; empty arrays are valid). Then call entregar_resumen now if it is available. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. ${evidencia}`);
+      this.pedirResumen(r.sesion, `The application has ended the practice. Do not speak. First call guardar_progreso if that tool is available (quote only verbatim learner words; empty arrays are valid). Then call entregar_resumen now if it is available. Explain in ${this.snapshot.configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"}. Include one demonstrated achievement with a verbatim learner quote, zero to two useful corrections with verbatim learner quotes, and one English phrase to practice. Never invent evidence or pronunciation feedback. ${evidencia}${notas ? ` ${notas}` : ""}`);
     } catch { this.fallar(r, ""); }
   };
 
@@ -262,7 +402,7 @@ export class ConversacionLive {
     if (accion === "cambiar_papel" && this.snapshot.configuracion.modo !== "simulacion") return;
     this.pararReproduccion(r);
     try {
-      this.instruir(r.sesion, instrucciones[accion]);
+      this.instruir(r, r.sesion, instrucciones[accion]);
       this.actualizar({ tutorHablando: false, esperandoRespuesta: true,
         ...(accion === "explicar" || accion === "retomar" ? { ayudaActiva: accion === "explicar" } : {}),
         ...(accion === "cambiar_papel" ? { papelActual: papel, ayudaActiva: false } : {}),
@@ -305,10 +445,12 @@ export class ConversacionLive {
       const id = r.transcripciones[rol];
       const anterior = id === undefined ? undefined : this.snapshot.mensajes.find((mensaje) => mensaje.id === id);
       if (anterior) {
+        this.registrarHistorial(r, rol, texto, { mensaje: anterior.id });
         this.actualizar({ mensajes: this.snapshot.mensajes.map((mensaje) => mensaje.id === id ? { ...mensaje, texto: mensaje.texto + texto } : mensaje) });
       } else if (id === undefined) {
         const nuevo = { id: ++this.siguienteId, rol, texto };
         r.transcripciones[rol] = nuevo.id;
+        if (visible) this.registrarHistorial(r, rol, texto, { mensaje: nuevo.id });
         this.actualizar({
           ...(visible ? { mensajes: [...this.snapshot.mensajes, nuevo] } : {}),
           ...(rol === "estudiante" ? { turnos: this.snapshot.turnos + 1 } : {}),
@@ -357,6 +499,15 @@ export class ConversacionLive {
     }
     if (typeof extra.apoyo === "boolean") {
       if (!r.cerrando) this.actualizar(extra.apoyo ? { apoyoActivo: true, esperandoRespuesta: !this.snapshot.tutorHablando } : { apoyoActivo: false });
+      return;
+    }
+    if (extra.textoInterno) {
+      if (r.cerrando) return;
+      const { rol, texto, item, final } = extra.textoInterno;
+      this.registrarHistorial(r, rol, texto, extra.textoInterno);
+      const entrada = item ? r.historialItems.get(item) : undefined;
+      const respondida = !!entrada && r.historial.slice(r.historial.indexOf(entrada) + 1).some((siguiente) => siguiente.rol === "tutor" && siguiente.texto.trim());
+      if (final && respondida && !this.snapshot.tutorHablando) this.cambioVozTutor(false);
       return;
     }
     for (const llamada of mensaje.toolCall?.functionCalls ?? []) {
@@ -455,10 +606,13 @@ export class ConversacionLive {
 
   iniciar = async (escenarioId: string, nivel: string | null, configuracion: ConfiguracionPractica = CONFIGURACION_INICIAL) => {
     if (this.actual) return;
+    const nivelValido = ["sin_evaluar", "A1", "A2", "B1", "B2", "C1", "C2"].includes(nivel ?? "") ? nivel as Nivel : null;
     const r: Recursos = {
       sesion: null, contexto: null, reproduccion: null, flujo: null, captura: null, analizador: null,
       fuentes: new Set(), proximoInicio: 0, ultimaVoz: -Infinity, transcripciones: {}, pulsacion: false, soltando: false, cerrando: false,
       audioRemoto: null, remotoHablando: false, remotoSonando: false, ultimaSalida: -Infinity,
+      escenarioId, historial: [], historialMensajes: new Map(), historialItems: new Map(),
+      decisiones: { activas: true, enCurso: false, pendiente: false, firma: "", fallos: 0, estado: ESTADO_PEDAGOGICO_INICIAL, guiaPendiente: "" },
     };
     this.actual = r;
     this.actualizar({ ...INICIAL, mensajes: [], estado: "conectando", configuracion: { ...configuracion }, papelActual: configuracion.papel, micSilenciado: configuracion.escucha === "pulsar" });
@@ -510,7 +664,6 @@ export class ConversacionLive {
         if (sonando !== r.remotoSonando) this.vozRemota(r, { sonando });
       }, 50);
       preparandoAudio = false;
-      const nivelValido = ["sin_evaluar", "A1", "A2", "B1", "B2", "C1", "C2"].includes(nivel ?? "") ? nivel as Nivel : null;
       const datos = await this.dependencias.crearToken({ escenarioId, nivel: nivelValido, configuracion });
       if (this.actual !== r) return;
       const sesion = await this.dependencias.conectar(datos, {
@@ -548,7 +701,7 @@ export class ConversacionLive {
       const apertura = configuracion.modo === "profesor"
         ? `Greet me now, out loud, without waiting for me to speak first. Speak in ${configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"} for your greeting and explanations, and English only for practice examples. ${configuracion.tema.trim() ? "Start with a brief explanation and example about my chosen learning goal." : "Ask what I would like to learn."} Then pause and listen.`
         : "Greet me now, out loud, without waiting for me to speak first. Use a short natural English opening in character for the assigned mode and roles. Then pause and listen.";
-      this.instruir(sesion, apertura);
+      this.instruir(r, sesion, apertura);
     } catch (error) {
       this.fallar(r, preparandoAudio ? errorMicrofono(error) : "No pudimos conectar con el tutor. Inténtalo de nuevo en unos momentos.");
     }
