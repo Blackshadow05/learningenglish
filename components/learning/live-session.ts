@@ -10,7 +10,7 @@ export type EstadoConversacion = "inactivo" | "conectando" | "en_vivo" | "finali
 export type MensajeConversacion = { id: number; rol: "estudiante" | "tutor"; texto: string };
 type Nivel = NivelPerfil;
 type DatosSesion = { token: string; modelo: string; instruccion: string; voz: string; sesionJson?: string };
-type RecursosTransporte = { flujo: MediaStream | null; salida: (flujoRemoto: MediaStream) => void };
+type RecursosTransporte = { flujo: MediaStream | null; salida: (flujoRemoto: MediaStream) => void; actividad?: () => { clara: number; total: number } };
 type Dependencias = {
   crearToken: (args: { escenarioId: string; nivel: Nivel | null; configuracion: ConfiguracionPractica }) => Promise<DatosSesion>;
   conectar: (datos: DatosSesion, callbacks: LiveCallbacks, configuracion: ConfiguracionPractica, transporte?: RecursosTransporte) => Promise<Session>;
@@ -79,6 +79,8 @@ type Recursos = {
   remotoHablando: boolean;
   remotoSonando: boolean;
   ultimaSalida: number;
+  vozClaraMs: number;
+  vozTotalMs: number;
   escenarioId: string;
   historial: EntradaHistorial[];
   historialMensajes: Map<number, EntradaHistorial>;
@@ -98,6 +100,8 @@ const MAX_HISTORIAL = 60;
 const MAX_ENTRADAS_DECISION = 10;
 const MAX_TEXTO_DECISION = 500;
 const MAX_FALLOS_DECISION = 3;
+const UMBRAL_VOZ_SUAVE = 0.012;
+const UMBRAL_VOZ_CLARA = 0.04;
 
 function contarPalabras(texto: string) {
   return texto.split(/\s+/).filter(Boolean).length;
@@ -556,6 +560,9 @@ export class ConversacionLive {
     let energia = 0;
     for (const muestra of muestras) energia += muestra * muestra;
     const rms = Math.sqrt(energia / muestras.length);
+    const duracion = (muestras.length / r.contexto!.sampleRate) * 1000;
+    if (rms > UMBRAL_VOZ_SUAVE) r.vozTotalMs += duracion;
+    if (rms > UMBRAL_VOZ_CLARA) r.vozClaraMs += duracion;
     this.niveles.entrada = r.soltando ? 0 : Math.min(1, rms * 9);
     if (rms > 0.025) r.ultimaVoz = performance.now();
     const hablando = !r.soltando && performance.now() - r.ultimaVoz < 800;
@@ -610,7 +617,7 @@ export class ConversacionLive {
     const r: Recursos = {
       sesion: null, contexto: null, reproduccion: null, flujo: null, captura: null, analizador: null,
       fuentes: new Set(), proximoInicio: 0, ultimaVoz: -Infinity, transcripciones: {}, pulsacion: false, soltando: false, cerrando: false,
-      audioRemoto: null, remotoHablando: false, remotoSonando: false, ultimaSalida: -Infinity,
+      audioRemoto: null, remotoHablando: false, remotoSonando: false, ultimaSalida: -Infinity, vozClaraMs: 0, vozTotalMs: 0,
       escenarioId, historial: [], historialMensajes: new Map(), historialItems: new Map(),
       decisiones: { activas: true, enCurso: false, pendiente: false, firma: "", fallos: 0, estado: ESTADO_PEDAGOGICO_INICIAL, guiaPendiente: "" },
     };
@@ -675,6 +682,7 @@ export class ConversacionLive {
         onclose: () => this.fallar(r, "La conexión de voz terminó. Puedes iniciar una nueva conversación."),
       }, configuracion, {
         flujo: r.flujo,
+        actividad: () => ({ clara: r.vozClaraMs, total: r.vozTotalMs }),
         salida: (flujoRemoto) => {
           if (this.actual !== r || !r.reproduccion || !r.analizador) return;
           const reproduccion = r.reproduccion;

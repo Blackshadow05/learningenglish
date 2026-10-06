@@ -16,10 +16,10 @@ export function useConversacionMini(): Conversacion {
     return new ConversacionLive({
       crearToken: (args) => {
         nivelActual = args.nivel;
-        return prepararSesion(args);
+        return prepararSesion({ ...args, turnosCliente: true });
       },
-      conectar: (datos, callbacks, _preferencias, transporte) =>
-        conectarRealtimeMini(datos, callbacks, transporte, (args) => ejecutarHerramienta({ ...args, nivel: nivelActual })),
+      conectar: (datos, callbacks, preferencias, transporte) =>
+        conectarRealtimeMini(datos, callbacks, transporte, (args) => ejecutarHerramienta({ ...args, nivel: nivelActual }), preferencias.escucha === "pulsar"),
       transcripcion: { estudiante: false, tutor: true },
       decidir: (args) => evaluarTurno(args),
     });
