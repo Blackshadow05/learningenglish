@@ -2,6 +2,7 @@ export type Word = {
   id: string;
   word: string;
   translation: string;
+  meaning: string;
   pronunciation: string;
   example: string;
   category: string;
@@ -12,6 +13,16 @@ export type Word = {
   mastery: number;
   interval: number;
   due: number;
+  struggles: number;
+  struggleNote: string;
+  origen: "personal" | "base";
+};
+
+export type TemaSugerido = {
+  nombre: string;
+  motivo: "reforzar" | "retomar" | "continuar";
+  practicado: boolean;
+  palabras: string[];
 };
 
 export type FraseDia = {

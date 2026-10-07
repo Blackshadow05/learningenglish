@@ -8,12 +8,14 @@
  * @module
  */
 
+import type * as aprendizaje from "../aprendizaje.js";
 import type * as conversacion from "../conversacion.js";
 import type * as conversacionEscenarios from "../conversacionEscenarios.js";
 import type * as conversacionMini from "../conversacionMini.js";
 import type * as conversacionOpenai from "../conversacionOpenai.js";
 import type * as decisiones from "../decisiones.js";
 import type * as escenarios from "../escenarios.js";
+import type * as gastos from "../gastos.js";
 import type * as seed_vocabularioBasico from "../seed/vocabularioBasico.js";
 import type * as vocabulario from "../vocabulario.js";
 
@@ -24,12 +26,14 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  aprendizaje: typeof aprendizaje;
   conversacion: typeof conversacion;
   conversacionEscenarios: typeof conversacionEscenarios;
   conversacionMini: typeof conversacionMini;
   conversacionOpenai: typeof conversacionOpenai;
   decisiones: typeof decisiones;
   escenarios: typeof escenarios;
+  gastos: typeof gastos;
   "seed/vocabularioBasico": typeof seed_vocabularioBasico;
   vocabulario: typeof vocabulario;
 }>;

@@ -1,8 +1,10 @@
-import { action } from "./_generated/server";
+import { action, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { buscarEscenario } from "./conversacionEscenarios";
 import { nivelIngles } from "./schema";
+import { registrarUso } from "./gastos";
+import { sumarUso, usoRespuestas, type ConceptoGasto } from "../lib/api-costs";
 import {
   ANIMOS, COMPRENSIONES, ERRORES, IDIOMAS_TUTOR, PASOS, PETICIONES,
   entradaTurno, entradaVoz, leerDecisionTurno, leerVoz, preguntasTurno, preguntaVoz, vozPorDefecto,
@@ -48,11 +50,23 @@ function escenarioDe(escenarioId: string) {
   return escenario ? { titulo: escenario.titulo, descripcion: escenario.descripcion } : undefined;
 }
 
-async function consultarDecisions(input: string, questions: PreguntaDecision[]): Promise<unknown> {
+export async function registrarUsoDecisions(
+  ctx: ActionCtx,
+  respuestas: unknown[],
+  registro: { fecha?: string; sesionId?: string; concepto: ConceptoGasto }
+): Promise<void> {
+  const validas = respuestas.filter((datos): datos is Record<string, unknown> => !!datos && typeof datos === "object");
+  if (!validas.length) return;
+  const uso = validas.map((datos) => usoRespuestas(datos.usage)).reduce(sumarUso);
+  const modelo = validas.map((datos) => datos.model).find((valor): valor is string => typeof valor === "string") ?? process.env.OPENAI_MODELO_DECISIONES ?? "gpt-6-luna";
+  await registrarUso(ctx, { ...registro, modelo, uso, llamadas: validas.length });
+}
+
+export async function consultarDecisions(input: string, questions: PreguntaDecision[], limiteMs = LIMITE_MS): Promise<unknown> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || process.env.OPENAI_DECISIONES === "off") return null;
   const control = new AbortController();
-  const limite = setTimeout(() => control.abort(), LIMITE_MS);
+  const limite = setTimeout(() => control.abort(), limiteMs);
   try {
     const respuesta = await fetch(URL_DECISIONS, {
       method: "POST",
@@ -75,6 +89,8 @@ async function consultarDecisions(input: string, questions: PreguntaDecision[]):
 
 export const evaluarTurno = action({
   args: {
+    sesionId: v.optional(v.string()),
+    fecha: v.optional(v.string()),
     escenarioId: v.string(),
     configuracion: configuracionPractica,
     historial: v.array(v.object({ rol: v.union(v.literal("estudiante"), v.literal("tutor")), texto: v.string() })),
@@ -87,7 +103,7 @@ export const evaluarTurno = action({
     }),
   },
   returns: v.union(v.null(), decisionTurno),
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
     if (args.configuracion.tema.length > 300) return null;
     const historial = args.historial
       .slice(-MAX_ENTRADAS)
@@ -99,6 +115,7 @@ export const evaluarTurno = action({
       entradaTurno(args.configuracion, historial, contexto, escenarioDe(args.escenarioId)),
       preguntasTurno(args.configuracion)
     );
+    await registrarUsoDecisions(ctx, [datos], { fecha: args.fecha, sesionId: args.sesionId, concepto: "decisiones" });
     return datos ? leerDecisionTurno(datos) : null;
   },
 });
@@ -108,6 +125,7 @@ export const elegirVoz = action({
     escenarioId: v.string(),
     nivel: v.union(nivelIngles, v.null()),
     configuracion: configuracionPractica,
+    fecha: v.optional(v.string()),
   },
   returns: v.object({
     proveedor: v.union(v.literal("mini"), v.literal("openai")),
@@ -122,6 +140,7 @@ export const elegirVoz = action({
       entradaVoz(args.configuracion, args.nivel, escenarioDe(args.escenarioId), memoria),
       [preguntaVoz()]
     );
+    await registrarUsoDecisions(ctx, [datos], { fecha: args.fecha, concepto: "eleccion_voz" });
     const voz = datos ? leerVoz(datos) : null;
     return voz ? { proveedor: voz, origen: "decisions" as const } : { proveedor: vozPorDefecto(args.configuracion), origen: "regla" as const };
   },

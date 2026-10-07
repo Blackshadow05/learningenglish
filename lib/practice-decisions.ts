@@ -40,6 +40,8 @@ export type ContextoDecision = {
   papel: "huesped" | "colaborador";
 };
 export type SolicitudDecision = {
+  sesionId?: string;
+  fecha?: string;
   escenarioId: string;
   configuracion: ConfiguracionPractica;
   historial: EntradaDecision[];
@@ -132,7 +134,7 @@ const NOMBRE_CORRECCIONES: Record<ConfiguracionPractica["correcciones"], string>
   durante: "during the conversation", al_final: "only in the final review", a_peticion: "only when the learner asks",
 };
 
-function opciones<T extends string>(descripciones: Record<T, string>): Opcion[] {
+export function opciones<T extends string>(descripciones: Record<T, string>): Opcion[] {
   return Object.entries<string>(descripciones).map(([value, description]) => ({ value, description }));
 }
 
@@ -191,7 +193,7 @@ export function entradaTurno(configuracion: ConfiguracionPractica, historial: En
 
 type Respuesta = Record<string, unknown>;
 
-function indexar(datos: unknown): Map<string, Respuesta> {
+export function indexar(datos: unknown): Map<string, Respuesta> {
   const mapa = new Map<string, Respuesta>();
   const lista = datos && typeof datos === "object" ? (datos as { answers?: unknown }).answers : null;
   if (!Array.isArray(lista)) return mapa;
@@ -203,11 +205,11 @@ function indexar(datos: unknown): Map<string, Respuesta> {
   return mapa;
 }
 
-function numero(valor: unknown): number | null {
+export function numero(valor: unknown): number | null {
   return typeof valor === "number" && Number.isFinite(valor) ? valor : null;
 }
 
-function leerEleccion<T extends string>(respuesta: Respuesta | undefined, valores: readonly T[], defecto: T): Eleccion<T> {
+export function leerEleccion<T extends string>(respuesta: Respuesta | undefined, valores: readonly T[], defecto: T): Eleccion<T> {
   const valor = valores.find((opcion) => opcion === respuesta?.choice);
   if (!respuesta || !valor) return { valor: defecto, probabilidad: 0, distribucion: {} };
   const distribucion: Partial<Record<T, number>> = {};
@@ -478,6 +480,10 @@ export function planificarGuia(decision: DecisionTurno, previo: EstadoPedagogico
                 : idioma === "ingles_simple" || paso === "simplificar" ? "Inglés más sencillo"
                   : null;
   return { estado, guia: completa && completa !== previo.ultimaGuia ? completa : "", intervencion, ayudaActiva, enfoque };
+}
+
+export function dificultadesSesion(estado: EstadoPedagogico): string[] {
+  return dificultades(estado).map(([tipo, veces]) => `${DIFICULTAD[tipo]} (${veces})`);
 }
 
 export function notasSesion(estado: EstadoPedagogico): string {

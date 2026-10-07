@@ -72,6 +72,34 @@ export const tipoObjetivoEvaluacion = v.union(
   v.literal("vocabulario")
 );
 
+export const motivoTema = v.union(
+  v.literal("reforzar"),
+  v.literal("retomar"),
+  v.literal("continuar")
+);
+
+export const conceptoGasto = v.union(
+  v.literal("voz"),
+  v.literal("transcripcion"),
+  v.literal("apoyo"),
+  v.literal("decisiones"),
+  v.literal("vocabulario"),
+  v.literal("plan"),
+  v.literal("eleccion_voz")
+);
+
+export const usoApi = v.object({
+  entradaTexto: v.number(),
+  entradaTextoCache: v.number(),
+  escrituraCache: v.number(),
+  entradaAudio: v.number(),
+  entradaAudioCache: v.number(),
+  entradaImagen: v.number(),
+  salidaTexto: v.number(),
+  salidaAudio: v.number(),
+  segundos: v.number(),
+});
+
 export const decisionRepaso = v.union(
   v.literal("reaprender"),
   v.literal("repasar_pronto"),
@@ -384,4 +412,82 @@ export default defineSchema({
     porPracticar: v.array(v.string()),
     creadoEn: v.number(),
   }).index("por_usuario_y_fecha", ["usuarioId", "creadoEn"]),
+
+  temasConversacion: defineTable({
+    clave: v.string(),
+    nombre: v.string(),
+    sesiones: v.number(),
+    dificultad: v.number(),
+    ultimaDificultad: v.number(),
+    ultimaSesionEn: v.number(),
+    ultimaFecha: v.string(),
+    creadoEn: v.number(),
+  })
+    .index("por_clave", ["clave"])
+    .index("por_ultima_sesion", ["ultimaSesionEn"]),
+
+  vocabularioPersonal: defineTable({
+    clave: v.string(),
+    texto: v.string(),
+    tipo: tipoContenido,
+    nivel: nivelIngles,
+    traduccion: v.string(),
+    significado: v.string(),
+    ejemplo: v.string(),
+    temas: v.array(v.id("temasConversacion")),
+    vecesVista: v.number(),
+    vecesCosto: v.number(),
+    ultimoCosto: v.optional(v.string()),
+    vistaEn: v.number(),
+    costoEn: v.optional(v.number()),
+    dominio: v.number(),
+    intervaloDias: v.number(),
+    proximoRepasoEn: v.number(),
+    repasos: v.number(),
+    creadoEn: v.number(),
+    actualizadoEn: v.number(),
+  })
+    .index("por_clave", ["clave"])
+    .index("por_vista", ["vistaEn"])
+    .index("por_costo", ["costoEn"]),
+
+  planesDiarios: defineTable({
+    fecha: v.string(),
+    estado: v.union(v.literal("generando"), v.literal("listo")),
+    palabras: v.array(v.object({ palabraId: v.id("vocabularioPersonal"), prioridad: v.number() })),
+    tema: v.optional(v.object({ temaId: v.id("temasConversacion"), motivo: motivoTema })),
+    origen: v.union(v.literal("decisions"), v.literal("regla")),
+    creadoEn: v.number(),
+    actualizadoEn: v.number(),
+  }).index("por_fecha", ["fecha"]),
+
+  sesionesVoz: defineTable({
+    sesionId: v.string(),
+    fecha: v.string(),
+    proveedor: proveedorVoz,
+    modelo: v.string(),
+    modo: v.string(),
+    tema: v.string(),
+    inicio: v.number(),
+    duracionSegundos: v.number(),
+    turnos: v.number(),
+    creadoEn: v.number(),
+  })
+    .index("por_sesion", ["sesionId"])
+    .index("por_fecha", ["fecha"]),
+
+  consumos: defineTable({
+    clave: v.string(),
+    fecha: v.string(),
+    sesionId: v.optional(v.string()),
+    concepto: conceptoGasto,
+    modelo: v.string(),
+    uso: usoApi,
+    llamadas: v.number(),
+    costo: v.number(),
+    creadoEn: v.number(),
+    actualizadoEn: v.number(),
+  })
+    .index("por_clave", ["clave"])
+    .index("por_fecha", ["fecha"]),
 });

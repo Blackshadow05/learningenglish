@@ -1,20 +1,25 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { GoogleGenAI } from "@google/genai";
 import { api } from "../../convex/_generated/api";
 import { ConversacionLive } from "./live-session";
 import { configuracionLive } from "./live-config";
+import { solicitudRegistro } from "../../lib/learning-memory";
 
 export type Conversacion = ReturnType<typeof useConversacionEnVivo>;
 
 export function useConversacionEnVivo() {
   const crearToken = useAction(api.conversacion.crearTokenLive);
   const evaluarTurno = useAction(api.decisiones.evaluarTurno);
+  const procesarSesion = useAction(api.aprendizaje.procesarSesion);
+  const registrarSesionVoz = useMutation(api.gastos.registrarSesionVoz);
   const [conversacion] = useState(() => new ConversacionLive({
     crearToken,
     decidir: (args) => evaluarTurno(args),
+    registrar: (registro) => { void procesarSesion(solicitudRegistro(registro)).catch(() => {}); },
+    gasto: { proveedor: "gemini", registrar: (sesion) => { void registrarSesionVoz(sesion).catch(() => {}); } },
     conectar: (datos, callbacks, preferencias) => new GoogleGenAI({
       apiKey: datos.token,
       apiVersion: "v1alpha",

@@ -8,7 +8,7 @@ import type { Word } from "./demo-data";
 
 export function Vocabulary() {
   const searchParams = useSearchParams();
-  const { vocabulary, planCargando, level, speak, rateWord, now } = useLearning();
+  const { vocabulary, vocabularioPersonal, planCargando, level, speak, rateWord, now } = useLearning();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState(searchParams.get("topic") ?? "Todas");
   const [reviewing, setReviewing] = useState(searchParams.get("review") === "true");
@@ -29,7 +29,7 @@ export function Vocabulary() {
     <section className="page-heading">
       <div className="eyebrow">TU VOCABULARIO DE HOY</div>
       <h1>Palabras que<br/>se quedan<span className="green-text">.</span></h1>
-      <p>Un poco de práctica. Mucho por decir.</p>
+      <p>{vocabularioPersonal ? "Bloom las eligió según lo que te costó al conversar." : "Un poco de práctica. Mucho por decir."}</p>
     </section>
     <div className="vocab-summary">
       <div><strong>{vocabulary.length}</strong><span>en tu plan de hoy</span></div>
@@ -59,7 +59,7 @@ export function Vocabulary() {
         <span className="word-info">
           <strong lang="en">{word.word}</strong>
           <span>{word.translation}</span>
-          <span className="word-tags">{word.category}<i>·</i>{word.level}{level && ranks.indexOf(word.level) <= ranks.indexOf(level) && <em>Para tu nivel</em>}</span>
+          <span className="word-tags">{word.category}<i>·</i>{word.level}{word.struggles > 0 ? <em>Te costó al conversar</em> : level && ranks.indexOf(word.level) <= ranks.indexOf(level) && <em>Para tu nivel</em>}</span>
         </span>
         <span className="word-meter" aria-label={`Familiaridad de ejemplo: ${word.mastery}%`}><i style={{ height: `${word.mastery}%` }}/></span>
         <Icon name="chevron" size={16}/>
@@ -77,12 +77,14 @@ export function Vocabulary() {
       <h2 className="word-title" lang="en">{detail.word}</h2>
       <button className="pronunciation" onClick={() => speak(detail.word)}><Icon name="volume" size={20}/>{detail.pronunciation || "Escuchar pronunciación"}</button>
       <h3 className="translation">{detail.translation}</h3>
+      {detail.meaning && <p className="muted">{detail.meaning}</p>}
+      {detail.struggles > 0 && <div className="soft-note"><Icon name="mic"/><span>{detail.struggleNote ? `Te costó al conversar: ${detail.struggleNote.replace(/[.\s]+$/, "")}.` : `Te costó al conversar${detail.struggles > 1 ? ` ${detail.struggles} veces` : ""}.`}</span></div>}
       {detail.example && <div className="example-box">
         <span className="eyebrow">EN LA VIDA REAL</span>
         <p lang="en">“{detail.example}”</p>
         <button className="text-button" onClick={() => speak(detail.example)}><Icon name="volume" size={18}/>Escuchar ejemplo</button>
       </div>}
-      <div className="soft-note"><Icon name="repeat"/><span>{detail.due === 0 ? "Lista para tu próximo repaso." : detail.interval === 0 ? "Volverá en un minuto para intentarlo otra vez." : `Próximo repaso en ${detail.interval} días.`}</span></div>
+      <div className="soft-note"><Icon name="repeat"/><span>{detail.due <= now ? "Lista para tu próximo repaso." : detail.interval === 0 ? "Volverá en un minuto para intentarlo otra vez." : `Próximo repaso en ${detail.interval} días.`}</span></div>
       <button className="button primary full" onClick={() => { setQueue([detail.id]); setReviewed(0); setRevealed(false); setDetail(null); setReviewing(true); }}>Practicar esta expresión<Icon name="arrow" size={18}/></button>
     </Modal>}
     {reviewing && <Modal title="Tu momento de repaso" onClose={() => setReviewing(false)}>
@@ -92,7 +94,7 @@ export function Vocabulary() {
           <span className="eyebrow">¿RECUERDAS QUÉ SIGNIFICA?</span>
           <h2 lang="en">{current.word}</h2>
           <button className="icon-button sound-button" onClick={() => speak(current.word)} aria-label="Escuchar palabra"><Icon name="volume" size={24}/></button>
-          {revealed ? <div className="revealed-answer"><h3>{current.translation}</h3>{current.example && <p lang="en">“{current.example}”</p>}</div> : <p className="muted">Piensa en la respuesta antes de darle la vuelta.</p>}
+          {revealed ? <div className="revealed-answer"><h3>{current.translation}</h3>{current.meaning && <p>{current.meaning}</p>}{current.example && <p lang="en">“{current.example}”</p>}</div> : <p className="muted">Piensa en la respuesta antes de darle la vuelta.</p>}
         </div>
         {revealed ? <>
           <h3 className="rating-heading">¿Qué tal la recordaste?</h3>

@@ -116,6 +116,20 @@
 .transcriptToggle { display: flex; margin: 15px auto; color: var(--voice-muted); }
 .summary .transcript { text-align: left; max-height: 300px; }
 .setup { display: grid; gap: 17px; }
+.suggestion { margin: 0 0 18px; padding: 18px 17px 16px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
+.suggestion h2 { font-size: 1.02rem; line-height: 1.35; font-weight: 600; letter-spacing: -.2px; margin: 8px 0 6px; }
+.suggestion > p:not(.eyebrow) { font-size: .74rem; color: var(--voice-muted); }
+.suggestionWords { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.suggestionWords span { font-size: .7rem; padding: 5px 10px; border-radius: 999px; background: #f1eef3; color: #705487; }
+.suggestionActions { display: flex; gap: 8px; margin-top: 14px; }
+.suggestionActions button { flex: 1; min-height: 42px; border-radius: 13px; font-size: .76rem; font-weight: 600; }
+.suggestionActions button:first-child { background: #776193; color: #fff; }
+.suggestionActions button:first-child:hover { background: #665181; }
+.suggestionActions button:last-child { color: var(--voice-accent); border: 1px solid var(--line); }
+.reinforce { margin: 0 0 18px; }
+.reinforce > p { font-size: .56rem; letter-spacing: 1.3px; font-weight: 650; color: var(--voice-muted); margin-bottom: 9px; }
+.reinforce > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.reinforce button { min-height: 36px; padding: 7px 13px; border-radius: 999px; font-size: .72rem; color: var(--voice-accent); background: var(--surface); border: 1px solid var(--line); }
 .modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .modeCard { display: flex; flex-direction: column; gap: 9px; align-items: flex-start; padding: 15px 10px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); color: var(--voice-muted); text-align: left; }
 .modeCard[aria-pressed="true"] { background: #f0eaf6; border-color: #b7a1ce; color: #705487; box-shadow: 0 3px 12px #79669c0c; }
@@ -201,6 +215,9 @@
   .modeCard[aria-pressed="true"] { background: #3d304a; border-color: #84699c; color: #cbb0e0; }
   .roles, .helpActions button { background: #302b38; }
   .roles button[aria-pressed="true"] { color: #dac3ee; background: #4a3b58; }
+  .suggestionWords span { background: #302b38; color: #dac3ee; }
+  .suggestionActions button:first-child { background: #d0bfdf; color: #3b2d4a; }
+  .suggestionActions button:first-child:hover { background: #e1cdef; }
 }
 @media (prefers-reduced-motion: reduce) {
   .orbFlow, .visualizer .orb { animation: none !important; }

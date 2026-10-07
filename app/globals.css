@@ -23,3 +23,5 @@
 /* Leave the illustration its own space on narrow screens. */
 .welcome-content p{max-width:180px}.welcome-content h2{text-wrap:initial}.welcome-art{pointer-events:none}.play-banner>div:first-child{position:relative;z-index:1;max-width:72%}
 @media(max-width:360px){.welcome-content p{max-width:160px}.welcome-art{right:-80px}.interest-option{font-size:.75rem}.section-heading h2{font-size:1rem}.learning-card p{font-size:.75rem}}
+.topic-entry{margin-top:10px}
+.topbar-cost{display:inline-flex;align-items:center;justify-content:center;width:40px;height:44px;border-radius:50%;color:var(--muted)}.topbar-cost[aria-current=page]{color:var(--foreground)}.settings-list a{display:flex;width:100%;align-items:center;gap:15px;text-align:left;padding:19px 16px;border-bottom:1px solid var(--line)}.settings-list a>svg{color:#84976b}.settings-list a>svg:last-child{margin-left:auto}
