@@ -1,6 +1,7 @@
 "use node";
 
 import { action } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { GoogleGenAI } from "@google/genai";
 import { buscarEscenario, construirInstruccion } from "./conversacionEscenarios";
@@ -23,7 +24,7 @@ export const crearTokenLive = action({
     })),
   },
   returns: v.object({ token: v.string(), modelo: v.string(), voz: v.string(), instruccion: v.string() }),
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error(
@@ -60,11 +61,17 @@ export const crearTokenLive = action({
     if (!token.name) {
       throw new Error("No se pudo crear el token efímero de Gemini.");
     }
+    const refuerzo: string = await ctx.runQuery(internal.aprendizaje.contextoTutorInterno, {
+      tema: args.configuracion?.tema ?? "",
+      general: !!args.configuracion && args.configuracion.modo !== "simulacion",
+    });
+    const instruccion = construirInstruccion(escenario, args.nivel, args.configuracion);
     return {
       token: token.name,
       modelo,
       voz,
-      instruccion: construirInstruccion(escenario, args.nivel, args.configuracion),
+      instruccion: refuerzo ? `${instruccion}
+${refuerzo}` : instruccion,
     };
   },
 });

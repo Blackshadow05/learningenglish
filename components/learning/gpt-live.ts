@@ -1,5 +1,6 @@
 "use client";
 
+import { usoRespuestas } from "../../lib/api-costs";
 import type {
   LiveCallbacks,
   LiveSendClientContentParameters,
@@ -196,6 +197,8 @@ export async function conectarGptLive(
         if (interno?.type === "response.completed" || interno?.type === "response.failed" || interno?.type === "response.incomplete" || interno?.type === "response.cancelled") {
           clearTimeout(temporizadorApoyo);
           emitir({ apoyo: false });
+          const respuesta = interno.response as { usage?: unknown; model?: unknown } | undefined;
+          if (respuesta?.usage) emitir({ consumo: { concepto: "apoyo", modelo: typeof respuesta.model === "string" ? respuesta.model : "", uso: usoRespuestas(respuesta.usage) } });
         }
         if (interno?.type === "response.output_item.done") {
           const item = interno.item as Record<string, unknown> | undefined;

@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react";
 
-export type IconName = "home" | "book" | "mic" | "mic-off" | "captions" | "keyboard" | "game" | "chart" | "settings" | "arrow" | "chevron" | "sparkles" | "flame" | "clock" | "check" | "close" | "volume" | "search" | "plus" | "globe" | "briefcase" | "coffee" | "headphones" | "repeat" | "target" | "send" | "pause" | "leaf" | "help" | "logout";
+export type IconName = "home" | "wallet" | "book" | "mic" | "mic-off" | "captions" | "keyboard" | "game" | "chart" | "settings" | "arrow" | "chevron" | "sparkles" | "flame" | "clock" | "check" | "close" | "volume" | "search" | "plus" | "globe" | "briefcase" | "coffee" | "headphones" | "repeat" | "target" | "send" | "pause" | "leaf" | "help" | "logout";
 const paths: Record<IconName, React.ReactNode> = {
+  wallet: <><path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M21 9h-5a3 3 0 0 0 0 6h5Z"/><path d="M16 12h.01"/></>,
   home: <><path d="m3 10 9-7 9 7"/><path d="M5 9v12h5v-7h4v7h5V9"/></>,
   book: <><path d="M12 5v16M3 4h5a4 4 0 0 1 4 2 4 4 0 0 1 4-2h5v15h-5a5 5 0 0 0-4 2 5 5 0 0 0-4-2H3Z"/></>,
   mic: <><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></>,

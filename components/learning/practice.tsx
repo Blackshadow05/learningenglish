@@ -12,6 +12,8 @@ import type { MensajeConversacion } from "./live-session";
 import { NOMBRES_MODO } from "../../lib/practice-config";
 import { vozPorDefecto, type NivelPerfil, type VozAutomatica } from "../../lib/practice-decisions";
 import { datosProveedor, PracticeSettings, usePreferenciasVoz, type VozConcreta } from "./practice-settings";
+import type { TemaSugerido } from "./demo-data";
+import { enFrase, fechaLocal } from "../../lib/learning-memory";
 import styles from "./practice.module.css";
 
 type Conversacion = ReturnType<typeof useConversacionEnVivo>;
@@ -183,9 +185,15 @@ function SalaVoz({ conversacion, titulo, proveedor, automatico, terminar, reinte
 }
 
 const NIVELES_PERFIL: NivelPerfil[] = ["sin_evaluar", "A1", "A2", "B1", "B2", "C1", "C2"];
+const MOTIVOS_TEMA: Record<TemaSugerido["motivo"], string> = {
+  reforzar: "La última vez te costó un poco. Lo reforzamos con calma.",
+  retomar: "Hace unos días que no lo practicas.",
+  continuar: "Sigamos con lo que has estado practicando.",
+};
 
 export function Practice() {
-  const { level } = useLearning();
+  const { level, temaSugerido, temasRefuerzo } = useLearning();
+  const [sugerenciaCerrada, setSugerenciaCerrada] = useState(false);
   const escenarios = useQuery(api.escenarios.listar);
   const elegirVoz = useAction(api.decisiones.elegirVoz);
   const gemini = useConversacionEnVivo();
@@ -212,12 +220,20 @@ export function Practice() {
     if (proveedor !== "auto" || !listo) return;
     let vigente = true;
     const espera = setTimeout(() => {
-      elegirVoz({ escenarioId: idSeleccionado, nivel: nivelPerfil, configuracion })
+      elegirVoz({ escenarioId: idSeleccionado, nivel: nivelPerfil, configuracion, fecha: fechaLocal() })
         .then(resultado => { if (vigente) setVozAutomatica({ clave: claveVoz, voz: resultado.proveedor }); })
         .catch(() => {});
     }, 600);
     return () => { vigente = false; clearTimeout(espera); };
   }, [proveedor, listo, claveVoz, idSeleccionado, nivelPerfil, configuracion, elegirVoz]);
+
+  const mostrarSugerencia = !!temaSugerido && !temaSugerido.practicado && !sugerenciaCerrada && configuracion.tema !== temaSugerido.nombre;
+  const otrosTemas = temasRefuerzo.filter(nombre => nombre !== configuracion.tema);
+
+  function elegirTema(nombre: string) {
+    cambiar(configuracion.modo === "simulacion" ? { modo: "libre", correcciones: "al_final", tema: nombre } : { tema: nombre });
+    setSugerenciaCerrada(true);
+  }
 
   function comenzar() {
     if (!listo) return;
@@ -266,6 +282,20 @@ export function Practice() {
         <p>Una charla, una explicación o una situación real.</p>
       </section>
       <div className={styles.preview}><Esfera fase="lista"/><span className={styles.voiceBadge}><span/>Voz en tiempo real</span></div>
+      {mostrarSugerencia && temaSugerido && <section className={styles.suggestion} aria-label="Sugerencia de Bloom">
+        <p className={styles.eyebrow}>BLOOM TE PROPONE</p>
+        <h2>¿Quieres que hablemos de {enFrase(temaSugerido.nombre)} hoy?</h2>
+        <p>{MOTIVOS_TEMA[temaSugerido.motivo]}</p>
+        {temaSugerido.palabras.length > 0 && <div className={styles.suggestionWords} aria-label="Palabras para reforzar">{temaSugerido.palabras.slice(0, 5).map(palabra => <span key={palabra} lang="en">{palabra}</span>)}</div>}
+        <div className={styles.suggestionActions}>
+          <button onClick={() => elegirTema(temaSugerido.nombre)}>Sí, hablemos de esto</button>
+          <button onClick={() => setSugerenciaCerrada(true)}>Otro día</button>
+        </div>
+      </section>}
+      {otrosTemas.length > 0 && <div className={styles.reinforce}>
+        <p>REFORZAR UN TEMA</p>
+        <div>{otrosTemas.map(nombre => <button key={nombre} onClick={() => elegirTema(nombre)}>{nombre}</button>)}</div>
+      </div>}
       <PracticeSettings configuracion={configuracion} cambiar={cambiar} proveedor={proveedor} cambiarProveedor={cambiarProveedor} vozAutomatica={listo ? vozElegida : null} escenarios={escenarios} escenarioId={idSeleccionado} elegirEscenario={setEscenarioId}/>
       <button className={styles.startButton} disabled={!listo} onClick={comenzar}><Icon name="mic" size={21}/>Empezar a hablar<Icon name="arrow" size={19}/></button>
       <p className={styles.startNote}>{configuracion.escucha === "pulsar" ? "Tú decides cuándo se abre el micrófono." : "Activa el micrófono una vez. Después, solo conversa."}</p>

@@ -1,4 +1,5 @@
 import { action } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { buscarEscenario, construirInstruccion } from "./conversacionEscenarios";
 import { nivelIngles } from "./schema";
@@ -39,13 +40,13 @@ function validarSolicitud(escenarioId: string, configuracion: ConfiguracionPract
   return escenario;
 }
 
-function construirSesion(escenarioId: string, nivel: string | null, configuracion: ConfiguracionPractica | undefined) {
+function construirSesion(escenarioId: string, nivel: string | null, configuracion: ConfiguracionPractica | undefined, refuerzo: string) {
   const escenario = validarSolicitud(escenarioId, configuracion);
   const modelo = process.env.OPENAI_MODELO_LIVE ?? "gpt-live-1";
   const voz = process.env.OPENAI_VOZ_LIVE ?? "marin";
   const modeloBackend = process.env.OPENAI_MODELO_BACKEND ?? "gpt-6-luna";
   const esfuerzoBackend = process.env.OPENAI_ESFUERZO_BACKEND ?? "low";
-  const instruccion = `${construirInstruccion(escenario, nivel, configuracion)}\n${INSTRUCCION_HERRAMIENTAS_OPENAI}`;
+  const instruccion = `${construirInstruccion(escenario, nivel, configuracion)}${refuerzo ? `\n${refuerzo}` : ""}\n${INSTRUCCION_HERRAMIENTAS_OPENAI}`;
   return {
     modelo,
     voz,
@@ -99,9 +100,13 @@ export const prepararSesionLive = action({
     configuracion: v.optional(configuracionPractica),
   },
   returns: v.object({ token: v.string(), modelo: v.string(), voz: v.string(), instruccion: v.string(), sesionJson: v.string() }),
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
     exigirApiKey();
-    const { modelo, voz, instruccion, sesionJson } = construirSesion(args.escenarioId, args.nivel, args.configuracion);
+    const refuerzo: string = await ctx.runQuery(internal.aprendizaje.contextoTutorInterno, {
+      tema: args.configuracion?.tema ?? "",
+      general: !!args.configuracion && args.configuracion.modo !== "simulacion",
+    });
+    const { modelo, voz, instruccion, sesionJson } = construirSesion(args.escenarioId, args.nivel, args.configuracion, refuerzo);
     return { token: "", modelo, voz, instruccion, sesionJson };
   },
 });

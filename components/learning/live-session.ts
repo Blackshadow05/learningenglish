@@ -2,9 +2,11 @@ import type { LiveCallbacks, LiveServerMessage, Session } from "@google/genai";
 import { CONFIGURACION_INICIAL, MINUTOS_SESION_VOZ, type ConfiguracionPractica, type AccionAyuda, type PapelEstudiante, type ResumenPractica } from "../../lib/practice-config";
 import { validarResumen } from "../../lib/practice-review";
 import {
-  contextoDecision, ESTADO_PEDAGOGICO_INICIAL, notasSesion, planificarGuia,
+  contextoDecision, dificultadesSesion, ESTADO_PEDAGOGICO_INICIAL, etiquetaNivel, notasSesion, planificarGuia,
   type DecisionTurno, type EntradaDecision, type EstadoPedagogico, type NivelPerfil, type SolicitudDecision,
 } from "../../lib/practice-decisions";
+import { fechaLocal, type RegistroSesion } from "../../lib/learning-memory";
+import { hayUso, sumarUso, usoGemini, USO_VACIO, type ConceptoGasto, type ConsumoSesion, type ProveedorGasto, type SesionGasto, type Uso } from "../../lib/api-costs";
 
 export type EstadoConversacion = "inactivo" | "conectando" | "en_vivo" | "finalizada" | "error";
 export type MensajeConversacion = { id: number; rol: "estudiante" | "tutor"; texto: string };
@@ -16,6 +18,8 @@ type Dependencias = {
   conectar: (datos: DatosSesion, callbacks: LiveCallbacks, configuracion: ConfiguracionPractica, transporte?: RecursosTransporte) => Promise<Session>;
   transcripcion?: Record<MensajeConversacion["rol"], boolean>;
   decidir?: (args: SolicitudDecision) => Promise<DecisionTurno | null>;
+  registrar?: (registro: RegistroSesion) => void;
+  gasto?: { proveedor: ProveedorGasto; registrar: (sesion: SesionGasto) => void };
 };
 type SesionExtendida = Session & {
   agregarInstruccion?: (texto: string) => void;
@@ -25,7 +29,7 @@ type SesionExtendida = Session & {
   solicitarResumen?: (texto: string) => void;
 };
 type TextoInterno = { rol: MensajeConversacion["rol"]; texto: string; item?: string; final?: boolean; nuevoTurno?: boolean };
-type MensajeExtra = LiveServerMessage & { vozRemota?: { hablando: boolean }; turnoEstudiante?: boolean; apoyo?: boolean; textoInterno?: TextoInterno };
+type MensajeExtra = LiveServerMessage & { vozRemota?: { hablando: boolean }; turnoEstudiante?: boolean; apoyo?: boolean; textoInterno?: TextoInterno; consumo?: { concepto: ConceptoGasto; modelo: string; uso: Uso } };
 type EntradaHistorial = EntradaDecision & { id: number };
 type OrigenHistorial = { mensaje?: number; item?: string; final?: boolean; nuevoTurno?: boolean };
 type Decisiones = {
@@ -82,6 +86,12 @@ type Recursos = {
   vozClaraMs: number;
   vozTotalMs: number;
   escenarioId: string;
+  nivel: Nivel | null;
+  sesionId: string;
+  fecha: string;
+  modelo: string;
+  conectadaEn: number | null;
+  usos: Map<string, ConsumoSesion>;
   historial: EntradaHistorial[];
   historialMensajes: Map<number, EntradaHistorial>;
   historialItems: Map<string, EntradaHistorial>;
@@ -96,7 +106,7 @@ const INICIAL: Snapshot = {
 };
 
 const ESPERA_DECISION_MS = 700;
-const MAX_HISTORIAL = 60;
+const MAX_HISTORIAL = 120;
 const MAX_ENTRADAS_DECISION = 10;
 const MAX_TEXTO_DECISION = 500;
 const MAX_FALLOS_DECISION = 3;
@@ -235,6 +245,8 @@ export class ConversacionLive {
       .map(({ rol, texto }) => ({ rol, texto: texto.trim().slice(-MAX_TEXTO_DECISION) }));
     try {
       const decision = await decidir({
+        sesionId: r.sesionId,
+        fecha: r.fecha,
         escenarioId: r.escenarioId,
         configuracion: this.snapshot.configuracion,
         historial,
@@ -333,6 +345,8 @@ export class ConversacionLive {
     // Invalidate first: late permission, token, WebSocket and audio callbacks are ignored.
     this.actual = null;
     if (!r) return;
+    this.registrarSesion(r);
+    this.registrarGasto(r);
     clearTimeout(r.timeout);
     clearTimeout(r.cierrePulsacion);
     clearTimeout(r.decisiones.temporizador);
@@ -353,6 +367,55 @@ export class ConversacionLive {
     if (r.reproduccion && r.reproduccion.state !== "closed") void r.reproduccion.close().catch(() => {});
     try { r.sesion?.close(); } catch { /* The transport may already be closed. */ }
     this.niveles.entrada = this.niveles.salida = 0;
+  }
+
+  private acumularUso(r: Recursos, concepto: ConceptoGasto, modelo: string, uso: Uso) {
+    if (!hayUso(uso)) return;
+    const clave = `${concepto}|${modelo}`;
+    const actual = r.usos.get(clave);
+    r.usos.set(clave, actual ? { ...actual, uso: sumarUso(actual.uso, uso), llamadas: actual.llamadas + 1 } : { concepto, modelo, uso, llamadas: 1 });
+  }
+
+  private registrarGasto(r: Recursos) {
+    const gasto = this.dependencias.gasto;
+    if (!gasto || (r.conectadaEn === null && !r.usos.size)) return;
+    const duracionSegundos = r.conectadaEn === null ? 0 : (Date.now() - r.conectadaEn) / 1000;
+    if (gasto.proveedor === "openai") this.acumularUso(r, "voz", r.modelo, { ...USO_VACIO, segundos: duracionSegundos });
+    try {
+      gasto.registrar({
+        sesionId: r.sesionId,
+        fecha: r.fecha,
+        proveedor: gasto.proveedor,
+        modelo: r.modelo,
+        modo: this.snapshot.configuracion.modo,
+        tema: this.snapshot.configuracion.tema,
+        inicio: r.conectadaEn ?? Date.now(),
+        duracionSegundos,
+        turnos: this.snapshot.turnos,
+        consumos: [...r.usos.values()],
+      });
+    } catch {
+      return;
+    }
+  }
+
+  private registrarSesion(r: Recursos) {
+    const registrar = this.dependencias.registrar;
+    const historial = r.historial.map(({ rol, texto }) => ({ rol, texto: texto.trim() })).filter((entrada) => entrada.texto);
+    if (!registrar || !historial.some((entrada) => entrada.rol === "estudiante")) return;
+    try {
+      registrar({
+        sesionId: r.sesionId,
+        fecha: r.fecha,
+        escenarioId: r.escenarioId,
+        configuracion: this.snapshot.configuracion,
+        historial,
+        dificultades: dificultadesSesion(r.decisiones.estado),
+        nivel: etiquetaNivel(r.decisiones.estado) ?? r.nivel,
+      });
+    } catch {
+      return;
+    }
   }
 
   private fallar(r: Recursos, error: string) {
@@ -493,6 +556,11 @@ export class ConversacionLive {
   private recibir(r: Recursos, mensaje: LiveServerMessage) {
     if (this.actual !== r) return;
     const extra = mensaje as MensajeExtra;
+    if (extra.consumo) {
+      this.acumularUso(r, extra.consumo.concepto, extra.consumo.modelo, extra.consumo.uso);
+      return;
+    }
+    if (mensaje.usageMetadata) this.acumularUso(r, "voz", r.modelo, usoGemini(mensaje.usageMetadata));
     if (extra.vozRemota) {
       this.vozRemota(r, { hablando: extra.vozRemota.hablando });
       return;
@@ -618,7 +686,9 @@ export class ConversacionLive {
       sesion: null, contexto: null, reproduccion: null, flujo: null, captura: null, analizador: null,
       fuentes: new Set(), proximoInicio: 0, ultimaVoz: -Infinity, transcripciones: {}, pulsacion: false, soltando: false, cerrando: false,
       audioRemoto: null, remotoHablando: false, remotoSonando: false, ultimaSalida: -Infinity, vozClaraMs: 0, vozTotalMs: 0,
-      escenarioId, historial: [], historialMensajes: new Map(), historialItems: new Map(),
+      escenarioId, nivel: nivelValido, historial: [], historialMensajes: new Map(), historialItems: new Map(),
+      sesionId: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      fecha: fechaLocal(), modelo: "", conectadaEn: null, usos: new Map(),
       decisiones: { activas: true, enCurso: false, pendiente: false, firma: "", fallos: 0, estado: ESTADO_PEDAGOGICO_INICIAL, guiaPendiente: "" },
     };
     this.actual = r;
@@ -673,6 +743,7 @@ export class ConversacionLive {
       preparandoAudio = false;
       const datos = await this.dependencias.crearToken({ escenarioId, nivel: nivelValido, configuracion });
       if (this.actual !== r) return;
+      r.modelo = datos.modelo;
       const sesion = await this.dependencias.conectar(datos, {
         onmessage: (mensaje) => {
           try { this.recibir(r, mensaje); }
@@ -704,7 +775,8 @@ export class ConversacionLive {
       clearTimeout(r.timeout);
       // Sessions are designed for 10-15 minutes; end them automatically with a summary.
       r.timeout = setTimeout(() => { if (this.actual === r) this.cerrarConResumen(); }, MINUTOS_SESION_VOZ * 60 * 1000);
-      this.actualizar({ estado: "en_vivo", inicio: Date.now(), esperandoRespuesta: true });
+      r.conectadaEn = Date.now();
+      this.actualizar({ estado: "en_vivo", inicio: r.conectadaEn, esperandoRespuesta: true });
       // System instructions alone do not trigger a spoken greeting.
       const apertura = configuracion.modo === "profesor"
         ? `Greet me now, out loud, without waiting for me to speak first. Speak in ${configuracion.idiomaAyuda === "espanol" ? "Spanish" : "English"} for your greeting and explanations, and English only for practice examples. ${configuracion.tema.trim() ? "Start with a brief explanation and example about my chosen learning goal." : "Ask what I would like to learn."} Then pause and listen.`

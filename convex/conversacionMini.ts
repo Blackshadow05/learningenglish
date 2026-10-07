@@ -64,6 +64,11 @@ export const prepararSesionMini = action({
     if (progresoPrevio) {
       instruccion += `\nLearner memory from previous sessions: ${progresoPrevio}. Naturally reuse the phrases to practice during the conversation; do not quiz the learner about this list.`;
     }
+    const refuerzo: string = await ctx.runQuery(internal.aprendizaje.contextoTutorInterno, {
+      tema: args.configuracion?.tema ?? "",
+      general: !!args.configuracion && args.configuracion.modo !== "simulacion",
+    });
+    if (refuerzo) instruccion += `\n${refuerzo}`;
     instruccion += `\n${INSTRUCCION_HERRAMIENTAS_MINI}`;
     const manual = args.configuracion?.escucha === "pulsar";
     const respuesta = await fetch(URL_SECRETOS_REALTIME, {

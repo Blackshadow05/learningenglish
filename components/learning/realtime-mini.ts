@@ -9,6 +9,7 @@ import type {
   Session,
 } from "@google/genai";
 import type { ActividadVoz, DatosSesionGpt, TransporteAudio } from "./gpt-live";
+import { usoRealtime, usoTranscripcion } from "../../lib/api-costs";
 
 // gpt-realtime-2.1-mini over WebRTC: SDP exchange against /v1/realtime with the
 // ephemeral client secret, one data channel for events, native function calling.
@@ -262,6 +263,7 @@ export async function conectarRealtimeMini(
         break;
       }
       case "conversation.item.input_audio_transcription.completed": {
+        if (datosEvento.usage) emitir({ consumo: { concepto: "transcripcion", modelo: "", uso: usoTranscripcion(datosEvento.usage) } });
         const item = texto("item_id");
         if (!item || descartados.has(item)) break;
         if (item === itemEnDuda) {
@@ -319,7 +321,8 @@ export async function conectarRealtimeMini(
       }
       case "response.done": {
         respuestaActiva = false;
-        const respuesta = datosEvento.response as { status?: unknown; status_details?: unknown } | undefined;
+        const respuesta = datosEvento.response as { status?: unknown; status_details?: unknown; usage?: unknown } | undefined;
+        if (respuesta?.usage) emitir({ consumo: { concepto: "voz", modelo: datos.modelo, uso: usoRealtime(respuesta.usage) } });
         if (respuesta?.status === "failed" || respuesta?.status === "incomplete") {
           console.warn("[Realtime-Mini]", respuesta.status, respuesta.status_details);
         }
